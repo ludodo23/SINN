@@ -1,0 +1,38 @@
+FoamFile
+{
+	version	2.0;
+	format	binary;
+	class	volVectorField;
+	location	"0";
+	object	U;
+	arch	"LSB;label=32;scalar=64";
+}
+dimensions	[0 1 -1 0 0 0 0];
+internalField	uniform (0 0 0);
+boundaryField
+{
+	right
+	{
+		type	movingWallVelocity;
+		value	uniform (0 0 0);
+	}
+	top
+	{
+		type	movingWallVelocity;
+		value	uniform (0 0 0);
+	}
+	bottom
+	{
+		type	movingWallVelocity;
+		value	uniform (0 0 0);
+	}
+	left
+	{
+		type	movingWallVelocity;
+		value	uniform (0 0 0);
+	}
+	empty
+	{
+		type	empty;
+	}
+}
