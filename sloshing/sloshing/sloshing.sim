@@ -1,0 +1,705 @@
+Graphics3D
+{
+	MeshParameters
+	{
+		default
+		{
+			bottom
+			{
+				color	(180 71 36);
+				transparency	0.0;
+				Model
+				{
+					isVisible	true;
+					representation	SurfaceWithEdges;
+				}
+				Slice
+				{
+					isVisible	false;
+					representation	SurfaceWithEdges;
+				}
+			}
+			empty
+			{
+				color	(255 235 51);
+				transparency	0.0;
+				Model
+				{
+					isVisible	true;
+					representation	SurfaceWithEdges;
+				}
+				Slice
+				{
+					isVisible	false;
+					representation	SurfaceWithEdges;
+				}
+			}
+			left
+			{
+				color	(92 255 51);
+				transparency	0.0;
+				Model
+				{
+					isVisible	true;
+					representation	SurfaceWithEdges;
+				}
+				Slice
+				{
+					isVisible	false;
+					representation	SurfaceWithEdges;
+				}
+			}
+			right
+			{
+				color	(51 255 194);
+				transparency	0.0;
+				Model
+				{
+					isVisible	true;
+					representation	SurfaceWithEdges;
+				}
+				Slice
+				{
+					isVisible	false;
+					representation	SurfaceWithEdges;
+				}
+			}
+			top
+			{
+				color	(51 133 255);
+				transparency	0.0;
+				Model
+				{
+					isVisible	true;
+					representation	SurfaceWithEdges;
+				}
+				Slice
+				{
+					isVisible	false;
+					representation	SurfaceWithEdges;
+				}
+			}
+		}
+	}
+	CellZonesParameters
+	{
+	}
+	ProbeParameters
+	{
+	}
+	View
+	{
+		SavedViews
+		{
+		}
+	}
+	GeometryParameters
+	{
+		Model
+		{
+			hide	false;
+		}
+		Slice
+		{
+			hide	false;
+		}
+		box_init
+		{
+			color	(184 190 194);
+			transparency	0.0;
+			Model
+			{
+				hide	false;
+			}
+			Slice
+			{
+				hide	true;
+			}
+		}
+	}
+	postprocessingPlots
+	{
+		residuals
+		{
+			properties
+			{
+				title	;
+				isXGridVisible	true;
+				isYGridVisible	true;
+				xLabel	Time [s];
+				yLabel	Residuum [-];
+			}
+			series
+			{
+				Ux
+				{
+					label	Ux;
+					color	(0 0 255);
+					isVisible	true;
+					thickness	1;
+					representation	Solid;
+				}
+				Uy
+				{
+					label	Uy;
+					color	(255 0 0);
+					isVisible	true;
+					thickness	1;
+					representation	Solid;
+				}
+				Uz
+				{
+					label	Uz;
+					color	(0 255 0);
+					isVisible	true;
+					thickness	1;
+					representation	Solid;
+				}
+				p
+				{
+					label	p;
+					color	(0 0 0);
+					isVisible	true;
+					thickness	1;
+					representation	Solid;
+				}
+				p_rgh
+				{
+					label	p_rgh;
+					color	(0 0 0);
+					isVisible	true;
+					thickness	1;
+					representation	Solid;
+				}
+				omega
+				{
+					label	omega;
+					color	(255 200 0);
+					isVisible	true;
+					thickness	1;
+					representation	Solid;
+				}
+				epsilon
+				{
+					label	epsilon;
+					color	(255 200 0);
+					isVisible	true;
+					thickness	1;
+					representation	Solid;
+				}
+				k
+				{
+					label	k;
+					color	(0 255 255);
+					isVisible	true;
+					thickness	1;
+					representation	Solid;
+				}
+			}
+		}
+		force
+		{
+			properties
+			{
+				title	;
+				isXGridVisible	true;
+				isYGridVisible	true;
+				xLabel	Time [s];
+				yLabel	Force [N];
+			}
+			series
+			{
+				Fx
+				{
+					label	Fx;
+					color	(255 0 0);
+					isVisible	true;
+					thickness	1;
+					representation	Solid;
+				}
+				Fy
+				{
+					label	Fy;
+					color	(84 255 0);
+					isVisible	true;
+					thickness	1;
+					representation	Solid;
+				}
+				Fz
+				{
+					label	Fz;
+					color	(0 169 255);
+					isVisible	true;
+					thickness	1;
+					representation	Solid;
+				}
+			}
+		}
+		moment
+		{
+			properties
+			{
+				title	;
+				isXGridVisible	true;
+				isYGridVisible	true;
+				xLabel	Time [s];
+				yLabel	Moment [Nm];
+			}
+			series
+			{
+				Mx
+				{
+					label	Mx;
+					color	(255 0 0);
+					isVisible	true;
+					thickness	1;
+					representation	Solid;
+				}
+				My
+				{
+					label	My;
+					color	(84 255 0);
+					isVisible	true;
+					thickness	1;
+					representation	Solid;
+				}
+				Mz
+				{
+					label	Mz;
+					color	(0 169 255);
+					isVisible	true;
+					thickness	1;
+					representation	Solid;
+				}
+			}
+		}
+	}
+	SectionViewParameters
+	{
+		point	(0 0 0);
+		normal	(0 0 1);
+		type	FullCell;
+		isEnabled	false;
+	}
+	PostprocessingParameters
+	{
+		ActiveTime	0;
+		ActiveField	Solid;
+	}
+	SlicesParameters
+	{
+	}
+}
+inputs
+{
+	default
+	{
+		radiationProperties
+		{
+			solarLoarCoeffs
+			{
+				sunDirection	(0 0 -1);
+			}
+			solarLoadCoeffs
+			{
+				sunDirection	(0 0 -1);
+			}
+		}
+	}
+}
+parameters
+{
+}
+run
+{
+	parallel	false;
+	processors	6;
+}
+materials
+{
+	regions
+	{
+	}
+	phases
+	{
+		phase1	water-liquid;
+		phase2	air-gas;
+	}
+}
+geometry
+{
+	box_init
+	{
+		type	searchableBox;
+		max	(6 -0.5 0.5);
+		size	(6 0.5 1);
+		min	(0 -1 -0.5);
+	}
+}
+initialization
+{
+	potentialInit	false;
+	nNonOrthogonalCorrectors	8;
+	mapInit	false;
+	mapConsistent	false;
+}
+fieldInputs
+{
+	default
+	{
+		p_rgh
+		{
+			internalField	uniform 0;
+			boundaryField
+			{
+				right
+				{
+					type	fixedFluxPressure;
+				}
+				top
+				{
+					type	fixedFluxPressure;
+				}
+				bottom
+				{
+					type	fixedFluxPressure;
+				}
+				left
+				{
+					type	fixedFluxPressure;
+				}
+				empty
+				{
+					type	empty;
+				}
+			}
+		}
+		U
+		{
+			internalField	uniform (0 0 0);
+			boundaryField
+			{
+				right
+				{
+					type	movingWallVelocity;
+					value	"uniform (0 0 0)";
+				}
+				top
+				{
+					type	movingWallVelocity;
+					value	"uniform (0 0 0)";
+				}
+				bottom
+				{
+					type	movingWallVelocity;
+					value	"uniform (0 0 0)";
+				}
+				left
+				{
+					type	movingWallVelocity;
+					value	"uniform (0 0 0)";
+				}
+				empty
+				{
+					type	empty;
+				}
+			}
+		}
+		k
+		{
+			internalField	uniform 1e-02;
+			boundaryField
+			{
+				right
+				{
+					type	kqRWallFunction;
+				}
+				top
+				{
+					type	kqRWallFunction;
+				}
+				bottom
+				{
+					type	kqRWallFunction;
+				}
+				left
+				{
+					type	kqRWallFunction;
+				}
+				empty
+				{
+					type	empty;
+				}
+			}
+		}
+		epsilon
+		{
+			internalField	uniform 1;
+			boundaryField
+			{
+				right
+				{
+					type	epsilonWallFunction;
+				}
+				top
+				{
+					type	epsilonWallFunction;
+				}
+				bottom
+				{
+					type	epsilonWallFunction;
+				}
+				left
+				{
+					type	epsilonWallFunction;
+				}
+				empty
+				{
+					type	empty;
+				}
+			}
+		}
+		nut
+		{
+			internalField	uniform 0.1;
+			boundaryField
+			{
+				right
+				{
+					type	nutUWallFunction;
+				}
+				top
+				{
+					type	nutUWallFunction;
+				}
+				bottom
+				{
+					type	nutUWallFunction;
+				}
+				left
+				{
+					type	nutUWallFunction;
+				}
+				empty
+				{
+					type	empty;
+				}
+			}
+		}
+		alpha.eau
+		{
+			internalField	uniform 0;
+			boundaryField
+			{
+				right
+				{
+					type	zeroGradient;
+				}
+				top
+				{
+					type	zeroGradient;
+				}
+				bottom
+				{
+					type	zeroGradient;
+				}
+				left
+				{
+					type	zeroGradient;
+				}
+				empty
+				{
+					type	empty;
+				}
+			}
+		}
+	}
+}
+meshing
+{
+	parallel	false;
+	processors	6;
+	meshingStages
+	{
+		Base	true;
+		Mesh	true;
+		Layers	true;
+	}
+}
+application
+{
+}
+summary
+{
+}
+regionInit
+{
+	patchInitializationMode	onInitialization;
+	box_init
+	{
+		type	cell;
+		fields
+		{
+			alpha.eau	1.0;
+		}
+	}
+}
+probes
+{
+}
+regionProperties
+{
+	default
+	{
+		bafflesSplit	false;
+		cellZones
+		{
+		}
+	}
+}
+mesh
+{
+}
+primitiveMesh
+{
+	type	plate;
+	box
+	{
+		min	(-0.5 -0.5 -0.5);
+		max	(0.5 0.5 0.5);
+		division	(10 10 10);
+		grading	(1 1 1);
+		lockCellSize	false;
+		boundaries
+		{
+			y_plus
+			{
+				name	boundaries;
+				type	patch;
+			}
+			x_plus
+			{
+				name	boundaries;
+				type	patch;
+			}
+			y_minus
+			{
+				name	boundaries;
+				type	patch;
+			}
+			x_minus
+			{
+				name	boundaries;
+				type	patch;
+			}
+			z_plus
+			{
+				name	boundaries;
+				type	patch;
+			}
+			z_minus
+			{
+				name	boundaries;
+				type	patch;
+			}
+		}
+	}
+	cylinder
+	{
+		axis	X;
+		origin	0;
+		radius	1;
+		length	1;
+		radialFraction	0.5;
+		radialDivision	10;
+		radialGrading	1;
+		axialDivision	10;
+		axialGrading	1;
+		circumferentialDivision	10;
+		boundaries
+		{
+			cylinder
+			{
+				name	boundaries;
+				type	patch;
+			}
+			outlet
+			{
+				name	boundaries;
+				type	patch;
+			}
+			inlet
+			{
+				name	boundaries;
+				type	patch;
+			}
+		}
+	}
+	plate
+	{
+		minx	0;
+		miny	-1;
+		maxx	6;
+		maxy	1;
+		divisionx	120;
+		divisiony	40;
+		gradingx	1;
+		gradingy	1;
+		lockCellSize	false;
+		boundaries
+		{
+			y_plus
+			{
+				name	top;
+				type	wall;
+			}
+			x_plus
+			{
+				name	right;
+				type	wall;
+			}
+			x_minus
+			{
+				name	left;
+				type	wall;
+			}
+			y_minus
+			{
+				name	bottom;
+				type	wall;
+			}
+		}
+	}
+	wedge
+	{
+		lockCellSize	false;
+		origin	0;
+		radius	1;
+		length	1;
+		radialDivision	10;
+		radialGrading	1;
+		axialDivision	10;
+		axialGrading	1;
+		boundaries
+		{
+			inlet
+			{
+				name	boundaries;
+				type	patch;
+			}
+			outlet
+			{
+				name	boundaries;
+				type	patch;
+			}
+			cylinder
+			{
+				name	boundaries;
+				type	patch;
+			}
+		}
+	}
+}
+slices
+{
+}

@@ -1,0 +1,122 @@
+# ============================================================
+# OpenFOAM
+# ============================================================
+
+# Résultats des simulations
+[0-9]*/
+[0-9][0-9]*/
+[0-9][0-9][0-9]*/
+
+# Post-processing / paraFoam
+postProcessing/
+*.OpenFOAM
+*.foam
+
+# Fichiers temporaires OpenFOAM
+*.log
+log.*
+*.bak
+
+# Paraview
+*.pvsm
+*.pvd
+*.vtp
+*.vtu
+*.vtk
+
+# # Maillages générés
+# constant/polyMesh/*
+
+# # On garde éventuellement le dossier polyMesh via .gitkeep
+# !constant/polyMesh/.gitkeep
+
+
+# ============================================================
+# Python
+# ============================================================
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environnements virtuels
+.venv/
+venv/
+env/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Tests / couverture
+.pytest_cache/
+.coverage
+htmlcov/
+
+
+# ============================================================
+# PINN / Machine Learning
+# ============================================================
+
+# Modèles entraînés
+*.pt
+*.pth
+*.ckpt
+*.onnx
+
+# Checkpoints
+checkpoints/
+models/
+weights/
+
+# Logs / TensorBoard
+runs/
+logs/
+
+# Données générées
+data/generated/
+data/processed/
+
+# Résultats ML
+results/
+outputs/
+
+
+# ============================================================
+# IDE / éditeurs
+# ============================================================
+
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+
+# ============================================================
+# Secrets / configuration locale
+# ============================================================
+
+.env
+.env.*
+!.env.example
+
+
+# ============================================================
+# Fichiers temporaires
+# ============================================================
+
+*.tmp
+*.temp
+*.cache

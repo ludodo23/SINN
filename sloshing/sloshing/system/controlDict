@@ -1,0 +1,73 @@
+FoamFile
+{
+	class	dictionary;
+	format	ascii;
+	location	system;
+	object	controlDict;
+	version	2.0;
+}
+adjustTimeStep	true;
+application	interFoam;
+deltaT	1e-03;
+endTime	20;
+maxAlphaCo	0.5;
+maxCo	0.8;
+maxDeltaT	1.0;
+purgeWrite	0;
+startFrom	latestTime;
+startTime	0;
+stopAt	endTime;
+timeFormat	general;
+timePrecision	6;
+writeControl	adjustableRunTime;
+writeInterval	0.2;
+writePrecision	7;
+runTimeModifiable	true;
+timeFormat	general;
+timePrecision	6;
+writeCompression	false;
+writeFormat	binary;
+writePrecision	7;
+libs	("libfvMotionSolvers.dll" "libturbulenceModels.dll" "libturbulenceModelSchemes.dll" "libfvOptions.dll");
+functions
+{
+	writeExtraFields
+	{
+		libs	("libutilityFunctionObjects.dll");
+		objects	(p rho);
+		type	writeObjects;
+		writeOption	anyWrite;
+		executeInterval	1;
+		enabled	true;
+		log	true;
+		writeControl	writeTime;
+		writeInterval	1;
+	}
+	forceCompositeMonitorOnRightInDefault
+	{
+		U	U;
+		composite	true;
+		libs	("libforces.dll");
+		p	p;
+		rho	rho;
+		type	forces;
+		compositeMonitor	true;
+		monitorSeparatePatches	false;
+		CofR	(0 0 0);
+		coefficients	(Cd Cl CmPitch);
+		executeInterval	1;
+		enabled	true;
+		log	true;
+		patches	(right);
+		rhoInf	1.0;
+		writeInterval	1;
+	}
+}
+OptimisationSwitches
+{
+	fileHandler	uncollated;
+	fileModificationSkew	0;
+	maxMasterFileBufferSize	1.0E9;
+	maxThreadFileBufferSize	1.0E9;
+	mpiBufferSize	200000000;
+}

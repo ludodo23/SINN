@@ -1,0 +1,168 @@
+FoamFile
+{
+	version	2.0;
+	format	binary;
+	class	dictionary;
+	location	"system";
+	object	changeDictionaryDict;
+}
+p_rgh
+{
+	boundaryField
+	{
+		right
+		{
+			type	fixedFluxPressure;
+		}
+		top
+		{
+			type	fixedFluxPressure;
+		}
+		bottom
+		{
+			type	fixedFluxPressure;
+		}
+		left
+		{
+			type	fixedFluxPressure;
+		}
+		empty
+		{
+			type	empty;
+		}
+	}
+}
+U
+{
+	boundaryField
+	{
+		right
+		{
+			type	movingWallVelocity;
+			value	uniform (0 0 0);
+		}
+		top
+		{
+			type	movingWallVelocity;
+			value	uniform (0 0 0);
+		}
+		bottom
+		{
+			type	movingWallVelocity;
+			value	uniform (0 0 0);
+		}
+		left
+		{
+			type	movingWallVelocity;
+			value	uniform (0 0 0);
+		}
+		empty
+		{
+			type	empty;
+		}
+	}
+}
+k
+{
+	boundaryField
+	{
+		right
+		{
+			type	kqRWallFunction;
+		}
+		top
+		{
+			type	kqRWallFunction;
+		}
+		bottom
+		{
+			type	kqRWallFunction;
+		}
+		left
+		{
+			type	kqRWallFunction;
+		}
+		empty
+		{
+			type	empty;
+		}
+	}
+}
+epsilon
+{
+	boundaryField
+	{
+		right
+		{
+			type	epsilonWallFunction;
+		}
+		top
+		{
+			type	epsilonWallFunction;
+		}
+		bottom
+		{
+			type	epsilonWallFunction;
+		}
+		left
+		{
+			type	epsilonWallFunction;
+		}
+		empty
+		{
+			type	empty;
+		}
+	}
+}
+nut
+{
+	boundaryField
+	{
+		right
+		{
+			type	nutUWallFunction;
+		}
+		top
+		{
+			type	nutUWallFunction;
+		}
+		bottom
+		{
+			type	nutUWallFunction;
+		}
+		left
+		{
+			type	nutUWallFunction;
+		}
+		empty
+		{
+			type	empty;
+		}
+	}
+}
+alpha.eau
+{
+	boundaryField
+	{
+		right
+		{
+			type	zeroGradient;
+		}
+		top
+		{
+			type	zeroGradient;
+		}
+		bottom
+		{
+			type	zeroGradient;
+		}
+		left
+		{
+			type	zeroGradient;
+		}
+		empty
+		{
+			type	empty;
+		}
+	}
+}
