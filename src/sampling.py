@@ -1,8 +1,10 @@
+
 import torch
 
 
 def sample_interior(n, cfg, device=None):
-    device = device or cfg.device
+    """Échantillonne le domaine intérieur en unités SI."""
+    device = torch.device(device or cfg.device)
 
     x = cfg.x_min + (cfg.x_max - cfg.x_min) * torch.rand(
         n, 1, device=device
@@ -14,11 +16,12 @@ def sample_interior(n, cfg, device=None):
         n, 1, device=device
     )
 
-    return torch.cat([x, y, t], dim=1)
+    return torch.cat((x, y, t), dim=1)
 
 
 def sample_initial(n, cfg, device=None):
-    device = device or cfg.device
+    """Échantillonne le domaine à l'instant initial, en SI."""
+    device = torch.device(device or cfg.device)
 
     x = cfg.x_min + (cfg.x_max - cfg.x_min) * torch.rand(
         n, 1, device=device
@@ -28,43 +31,54 @@ def sample_initial(n, cfg, device=None):
     )
     t = torch.full_like(x, cfg.t_min)
 
-    return torch.cat([x, y, t], dim=1)
+    return torch.cat((x, y, t), dim=1)
 
 
-def sample_walls(n, cfg, device=None):
+def sample_walls(n, cfg, device=None, include_top=True):
     """
-    Échantillonne les quatre côtés du rectangle.
+    Échantillonne les parois du rectangle en unités SI.
 
-    IMPORTANT : si le bord supérieur est une ouverture, il faut
-    retirer ce bord de l'échantillonnage des parois.
+    include_top=False si le bord supérieur est une ouverture.
+    Les points sont répartis entre les parois échantillonnées.
     """
-    device = device or cfg.device
-    m = max(1, n // 4)
+    device = torch.device(device or cfg.device)
 
-    t = cfg.t_min + (cfg.t_max - cfg.t_min) * torch.rand(
-        m, 1, device=device
-    )
-    x = cfg.x_min + (cfg.x_max - cfg.x_min) * torch.rand(
-        m, 1, device=device
-    )
-    y = cfg.y_min + (cfg.y_max - cfg.y_min) * torch.rand(
-        m, 1, device=device
-    )
+    # Trois côtés si le sommet est ouvert, sinon quatre.
+    sides = ["left", "right", "bottom"]
+    if include_top:
+        sides.append("top")
 
-    left = torch.cat([
-        torch.full_like(y, cfg.x_min), y, t
-    ], dim=1)
+    counts = [n // len(sides)] * len(sides)
+    for i in range(n % len(sides)):
+        counts[i] += 1
 
-    right = torch.cat([
-        torch.full_like(y, cfg.x_max), y, t
-    ], dim=1)
+    points = []
 
-    bottom = torch.cat([
-        x, torch.full_like(x, cfg.y_min), t
-    ], dim=1)
+    for side, m in zip(sides, counts):
+        if m == 0:
+            continue
 
-    top = torch.cat([
-        x, torch.full_like(x, cfg.y_max), t
-    ], dim=1)
+        t = cfg.t_min + (cfg.t_max - cfg.t_min) * torch.rand(
+            m, 1, device=device
+        )
 
-    return torch.cat([left, right, bottom, top], dim=0)
+        if side in ("left", "right"):
+            y = cfg.y_min + (cfg.y_max - cfg.y_min) * torch.rand(
+                m, 1, device=device
+            )
+            x_value = cfg.x_min if side == "left" else cfg.x_max
+            x = torch.full_like(y, x_value)
+            points.append(torch.cat((x, y, t), dim=1))
+
+        else:
+            x = cfg.x_min + (cfg.x_max - cfg.x_min) * torch.rand(
+                m, 1, device=device
+            )
+            y_value = cfg.y_min if side == "bottom" else cfg.y_max
+            y = torch.full_like(x, y_value)
+            points.append(torch.cat((x, y, t), dim=1))
+
+    if not points:
+        return torch.empty((0, 3), device=device)
+
+    return torch.cat(points, dim=0)

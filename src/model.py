@@ -5,50 +5,55 @@ import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
+from typing import Any, Mapping, Optional
+import torch
+from torch import nn
 
+def _cfg_value(cfg: Any, name: str, default: Any = None) -> Any:
+    if cfg is None: return default
+    if isinstance(cfg, Mapping): return cfg.get(name, default)
+    return getattr(cfg, name, default)
 
 class SloshingPINN(nn.Module):
-    """
-    Entrées : x, y, t
-    Sorties : u, v, p, alpha, k, epsilon
-    """
-
-    def __init__(self, width=96, hidden_layers=5):
+    """forward takes [x/Lref,y/Lref,t/Tref], returns u*, v*, p*, alpha."""
+    def __init__(self, cfg: Any = None, width: Optional[int] = None,
+                 hidden_layers: Optional[int] = None):
         super().__init__()
+        self.cfg = cfg
+        width = int(width if width is not None else _cfg_value(cfg, "hidden_width", 96))
+        hidden_layers = int(hidden_layers if hidden_layers is not None else
+                            _cfg_value(cfg, "hidden_layers", 5))
+        if width < 1 or hidden_layers < 1:
+            raise ValueError("width and hidden_layers must be positive.")
+        layers, n_in = [], 3
+        for _ in range(hidden_layers):
+            layer = nn.Linear(n_in, width)
+            nn.init.xavier_uniform_(layer.weight); nn.init.zeros_(layer.bias)
+            layers += [layer, nn.Tanh()]
+            n_in = width
+        self.backbone = nn.Sequential(*layers)
+        self.head = nn.Linear(width, 4)
+        nn.init.xavier_uniform_(self.head.weight); nn.init.zeros_(self.head.bias)
 
-        layers = [
-            nn.Linear(3, width),
-            nn.Tanh(),
-        ]
+    def forward(self, coords_star: torch.Tensor) -> dict[str, torch.Tensor]:
+        if coords_star.ndim != 2 or coords_star.shape[1] != 3:
+            raise ValueError("coords_star must have shape (N,3): [x*,y*,t*].")
+        raw = self.head(self.backbone(coords_star))
+        return {"u": raw[:, 0:1], "v": raw[:, 1:2], "p": raw[:, 2:3],
+                "alpha": torch.sigmoid(raw[:, 3:4])}
 
-        for _ in range(hidden_layers - 1):
-            layers.extend([
-                nn.Linear(width, width),
-                nn.Tanh(),
-            ])
-
-        layers.append(nn.Linear(width, 6))
-        self.net = nn.Sequential(*layers)
-        self.apply(self._initialize_weights)
-
-    @staticmethod
-    def _initialize_weights(module):
-        if isinstance(module, nn.Linear):
-            nn.init.xavier_normal_(module.weight)
-            nn.init.zeros_(module.bias)
-
-    def forward(self, coords):
-        raw = self.net(coords)
-        u, v, p, alpha_raw, k_raw, eps_raw = raw.split(1, dim=-1)
-
-        return {
-            "u": u,
-            "v": v,
-            "p": p,
-            "alpha": torch.sigmoid(alpha_raw),
-            "k": F.softplus(k_raw) + 1e-8,
-            "epsilon": F.softplus(eps_raw) + 1e-8,
-        }
+    def predict_physical(self, coords_si: torch.Tensor) -> dict[str, torch.Tensor]:
+        """SI [x,y,t] in; SI u,v,p and dimensionless alpha out."""
+        if self.cfg is None:
+            raise ValueError("predict_physical requires the Config used to build the model.")
+        L = float(_cfg_value(self.cfg, "length_ref"))
+        U = float(_cfg_value(self.cfg, "velocity_ref"))
+        rho = float(_cfg_value(self.cfg, "rho_ref"))
+        T = L / U
+        scales = coords_si.new_tensor([L, L, T])
+        f = self.forward(coords_si / scales)
+        return {"u": U*f["u"], "v": U*f["v"], "p": rho*U**2*f["p"],
+                "alpha": f["alpha"]}
 
 
 # ============================================================
@@ -152,9 +157,6 @@ def generate_sinn_npz(
     output_npz=None,
     model=None,
     checkpoint=None,
-    config=None,
-    config_path=None,
-    config_class=None,
     device=None,
     batch_size=65536,
 ):
@@ -179,16 +181,6 @@ def generate_sinn_npz(
     checkpoint : str | Path | None
         Chemin du checkpoint .pt. Peut contenir model_state_dict
         et config, ou seulement un state_dict.
-
-    config : objet | dict | classe | chemin | None
-        Configuration déjà chargée, classe Config, ou chemin JSON.
-
-    config_path : str | Path | None
-        Chemin JSON de la configuration.
-
-    config_class : type | None
-        Classe de configuration possédant load_json(path).
-        Utile lorsque config_path est fourni.
 
     device : str | torch.device | None
         Appareil d'inférence.
@@ -252,8 +244,6 @@ def generate_sinn_npz(
     # --------------------------------------------------------
     # Configuration et checkpoint
     # --------------------------------------------------------
-    saved = None
-
     if checkpoint is not None:
         checkpoint_file = Path(checkpoint).expanduser().resolve()
 
@@ -269,23 +259,11 @@ def generate_sinn_npz(
         else:
             device = torch.device(device)
 
-        saved = torch.load(
+        model = torch.load(
             checkpoint_file,
             map_location=device,
             weights_only=False,
         )
-
-        # Si aucune configuration n'est fournie, on essaie
-        # de récupérer celle du checkpoint.
-        if config is None and config_path is None:
-            if isinstance(saved, dict) and "config" in saved:
-                config = saved["config"]
-
-    cfg = _load_config(
-        config=config,
-        config_path=config_path,
-        config_class=config_class,
-    )
 
     # --------------------------------------------------------
     # Initialisation ou réutilisation du modèle
@@ -298,38 +276,17 @@ def generate_sinn_npz(
         device = torch.device(device)
 
     if model is None:
-        if saved is None:
-            raise ValueError(
-                "Fournis soit une instance model, soit un checkpoint .pt."
-            )
-
-        width = _get_config_value(cfg, "hidden_width", 96)
-        hidden_layers = _get_config_value(cfg, "hidden_layers", 5)
-
-        model = SloshingPINN(
-            width=int(width),
-            hidden_layers=int(hidden_layers),
+        raise ValueError(
+            "Fournis soit une instance model, soit un checkpoint .pt."
         )
 
-        if isinstance(saved, dict):
-            if "model_state_dict" in saved:
-                state_dict = saved["model_state_dict"]
-            elif "state_dict" in saved:
-                state_dict = saved["state_dict"]
-            else:
-                state_dict = saved
-        else:
-            state_dict = saved
-
-        model.load_state_dict(state_dict)
-
-    model = model.to(device)
-    model.eval()
+    model.eval()  # model.train(False)  # Désactive le dropout et la normalisation par lot
+    model.to(device)
 
     # --------------------------------------------------------
     # Évaluation aux mêmes (t, x, y) que le dataset OpenFOAM
     # --------------------------------------------------------
-    field_names = ("u", "v", "p", "alpha", "k", "epsilon")
+    field_names = ("u", "v", "p", "alpha")
 
     predictions = {
         name: np.empty((n_times, n_points), dtype=np.float32)
@@ -363,7 +320,7 @@ def generate_sinn_npz(
                     device=device,
                 )
 
-                pred = model(coords)
+                pred = model.predict_physical(coords)
 
                 for name in field_names:
                     if name not in pred:
@@ -397,8 +354,6 @@ def generate_sinn_npz(
         v=predictions["v"],
         p=predictions["p"],
         alpha_eau=predictions["alpha"],
-        k=predictions["k"],
-        epsilon=predictions["epsilon"],
     )
 
     print("\nDataset SINN généré :")

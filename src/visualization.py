@@ -10,7 +10,7 @@ from IPython.display import HTML, display
 from model import SloshingPINN
 
 
-def plot_history(path="outputs/loss_history.json"):
+def plot_history(path="outputs/loss_history.json", use_same_figure=True):
     with open(path, encoding="utf-8") as file:
         history = json.load(file)
 
@@ -21,20 +21,30 @@ def plot_history(path="outputs/loss_history.json"):
         if key != "epoch"
     ]
 
+    if use_same_figure:
+        fig, ax = plt.subplots()
+
+
     for name in loss_names:
         values = [
             max(row[name], 1e-16)
             for row in history
         ]
 
-        plt.figure()
-        plt.semilogy(epochs, values)
-        plt.xlabel("Époque")
-        plt.ylabel(name)
-        plt.title(f"Historique de la perte : {name}")
-        plt.grid(True)
-        plt.tight_layout()
-        plt.show()
+        if not use_same_figure:
+            ax, fig = plt.subplots()
+            ax.set_ylabel(name)
+        else:
+            ax.set_ylabel("Perte (échelle logarithmique)")
+
+        ax.semilogy(epochs, values, label=name)
+        ax.set_xlabel("Époque")
+        ax.set_title(f"Historique de la perte : {name}")
+        ax.grid(True)
+        fig.tight_layout()
+    if use_same_figure:
+        ax.legend()
+    plt.show()
 
 
 def load_model(
@@ -92,7 +102,7 @@ def plot_fields(
 
     prediction = model(coords)
 
-    for field in ["u", "v", "p", "alpha", "k", "epsilon"]:
+    for field in ["u", "v", "p", "alpha"]: #, "k", "epsilon"]:
         Z = prediction[field].cpu().numpy().reshape(ny, nx)
 
         plt.figure()
