@@ -12,6 +12,17 @@ from model import SloshingPINN
 
 
 def plot_history(path="outputs/loss_history.json", use_same_figure=True):
+    """Plot training loss history.
+
+    Parameters
+    ----------
+    path : str, optional
+        Path to the loss history JSON file. Default is
+        ``"outputs/loss_history.json"``.
+    use_same_figure : bool, optional
+        If True, plot all losses in a single figure. If False, create
+        a separate figure for each loss. Default is True.
+    """
     with open(path, encoding="utf-8") as file:
         history = json.load(file)
 
@@ -36,11 +47,11 @@ def plot_history(path="outputs/loss_history.json", use_same_figure=True):
             ax, fig = plt.subplots()
             ax.set_ylabel(name)
         else:
-            ax.set_ylabel("Perte (échelle logarithmique)")
+            ax.set_ylabel("Loss (log scale)")
 
         ax.semilogy(epochs, values, label=name)
-        ax.set_xlabel("Époque")
-        ax.set_title(f"Historique de la perte : {name}")
+        ax.set_xlabel("Epoch")
+        ax.set_title(f"Loss history: {name}")
         ax.grid(True)
         fig.tight_layout()
     if use_same_figure:
@@ -53,15 +64,37 @@ def load_model(
     config=None,
     device=None,
 ):
+    """Load a trained SloshingPINN model from a checkpoint.
+
+    Parameters
+    ----------
+    checkpoint : str, optional
+        Path to the ``.pt`` checkpoint file. Default is
+        ``"outputs/sloshing_pinn.pt"``.
+    config : object, optional
+        Configuration object. If None, attempts to recover it from
+        the checkpoint.
+    device : str, optional
+        Device for the model. Defaults to CUDA if available, else CPU.
+
+    Returns
+    -------
+    model : SloshingPINN
+        Loaded model in evaluation mode.
+    device : torch.device
+        Device the model is on.
+    cfg : object
+        Configuration associated with the model.
+    """
     device = device or (
         "cuda" if torch.cuda.is_available() else "cpu"
     )
 
-    # Construit le modèle et charge les poids via l'API recommandée PyTorch
-    # (state_dict) directement dans __init__.
+    # Build the model and load weights via the recommended PyTorch API
+    # (state_dict) directly in __init__.
     model = SloshingPINN(state_path=checkpoint, config=config).to(device)
 
-    # Si aucune config n'a été fournie, tente de la récupérer depuis le checkpoint.
+    # If no config was provided, try to recover it from the checkpoint.
     if model.cfg is None:
         saved = torch.load(
             checkpoint,
@@ -84,28 +117,29 @@ def plot_fields(
     fields=("u", "v", "p", "alpha"),
     openfoam_data=None,
 ):
-    """Affiche les champs prédits par le modèle PINN à l'instant t.
+    """Plot fields predicted by the PINN model at time t.
 
-    Paramètres
+    Parameters
     ----------
     model : SloshingPINN
-        Modèle déjà chargé (obligatoire). La configuration est récupérée
-        depuis model.cfg et les prédictions passent par predict_physical
-        (coordonnées SI).
-    t : float
-        Instant d'affichage en secondes.
-    nx, ny : int
-        Résolution de la grille d'affichage.
-    fields : tuple[str]
-        Noms des champs à afficher (parmi "u", "v", "p", "alpha").
-    openfoam_data : str | dict | None
-        Si fourni, pour chaque champ affiche trois graphes en ligne :
-        OpenFOAM, modèle PINN et erreur relative (échelle 0 à 1).
+        Loaded model (required). The configuration is retrieved from
+        ``model.cfg`` and predictions go through ``predict_physical``
+        (SI coordinates).
+    t : float, optional
+        Time in seconds for display. Default is 0.0.
+    nx, ny : int, optional
+        Grid resolution for display. Defaults are 180 and 80.
+    fields : tuple of str, optional
+        Names of fields to display (among "u", "v", "p", "alpha").
+        Default is ``("u", "v", "p", "alpha")``.
+    openfoam_data : str or dict or None, optional
+        If provided, for each field displays three panels side by side:
+        OpenFOAM, PINN model, and relative error (scale 0 to 1).
     """
     cfg = model.cfg
     if cfg is None:
         raise ValueError(
-            "Le modèle ne possède pas de configuration (model.cfg est None)."
+            "The model has no configuration (model.cfg is None)."
         )
 
     if isinstance(cfg, dict):
@@ -139,17 +173,17 @@ def plot_fields(
 
     prediction = model.predict_physical(coords)
 
-    # Chargement éventuel des données OpenFOAM pour comparaison.
+    # Load OpenFOAM data for comparison if provided.
     of = None
     if openfoam_data is not None:
         of = _load_animation_data(openfoam_data)
         if "X" not in of or "time" not in of:
             raise ValueError(
-                "openfoam_data doit contenir les clés 'X' et 'time'."
+                "openfoam_data must contain keys 'X' and 'time'."
             )
         X_of = np.asarray(of["X"])
         t_of = np.asarray(of["time"]).reshape(-1)
-        # Trouver l'instant OpenFOAM le plus proche de t.
+        # Find the OpenFOAM time closest to t.
         i_t = int(np.argmin(np.abs(t_of - t)))
 
     for field in fields:
@@ -161,11 +195,11 @@ def plot_fields(
             plt.colorbar(label=field)
             plt.xlabel("x [m]")
             plt.ylabel("y [m]")
-            plt.title(f"{field} à t = {t:g} s")
+            plt.title(f"{field} at t = {t:g} s")
             plt.tight_layout()
             plt.show()
         else:
-            # Trois graphes : OpenFOAM, modèle, erreur relative.
+            # Three panels: OpenFOAM, model, relative error.
             Z_of = np.asarray(of[field])[i_t].reshape(ny, nx)
             with np.errstate(divide="ignore", invalid="ignore"):
                 denom = np.maximum(np.abs(Z_of), 1e-12)
@@ -181,11 +215,11 @@ def plot_fields(
             fig.colorbar(im0, ax=axes[0], label=field, fraction=0.046)
 
             im1 = axes[1].contourf(X, Y, Z, levels=40)
-            axes[1].set_title("SINN (modèle)")
+            axes[1].set_title("SINN (model)")
             fig.colorbar(im1, ax=axes[1], label=field, fraction=0.046)
 
             im2 = axes[2].contourf(X, Y, err, levels=40, vmin=0, vmax=1)
-            axes[2].set_title("Erreur relative")
+            axes[2].set_title("Relative error")
             fig.colorbar(im2, ax=axes[2], label="|m−o|/max(|o|,eps)", fraction=0.046)
 
             for ax in axes:
@@ -194,13 +228,24 @@ def plot_fields(
                 ax.set_aspect("equal", adjustable="box")
                 ax.grid(alpha=0.15)
 
-            fig.suptitle(f"{field} à t = {t:g} s")
+            fig.suptitle(f"{field} at t = {t:g} s")
             fig.tight_layout()
             plt.show()
 
 
 def _load_animation_data(data):
-    """Charge un dataset depuis un chemin .npz ou un dictionnaire."""
+    """Load a dataset from an .npz path or a dictionary.
+
+    Parameters
+    ----------
+    data : str, bytes, dict, or NpzFile
+        Path to an .npz file, a dictionary, or an NpzFile object.
+
+    Returns
+    -------
+    dict
+        Dictionary mapping array names to array values.
+    """
     if isinstance(data, (str, bytes)):
         with np.load(data) as file:
             return {key: file[key] for key in file.files}
@@ -208,7 +253,18 @@ def _load_animation_data(data):
     if isinstance(data, dict):
         return data
 
-    # Permet aussi de passer directement un objet NpzFile
+    # Handle Path objects by converting to string (must be before str check)
+    if isinstance(data, Path):
+        data = str(data)
+
+    if isinstance(data, (str, bytes)):
+        with np.load(data) as file:
+            return {key: file[key] for key in file.files}
+
+    if isinstance(data, dict):
+        return data
+
+    # Allow also passing an NpzFile object directly
     return {key: data[key] for key in data.files}
 
 
@@ -217,25 +273,26 @@ def build_sinn_data_from_model(
     openfoam_data,
     batch_size: int = 65536,
 ) -> dict:
-    """Évalue le modèle PINN aux mêmes (x, y, t) que le dataset OpenFOAM.
+    """Evaluate the PINN model at the same (x, y, t) as the OpenFOAM dataset.
 
-    Les coordonnées sont en unités SI ; l'appel passe par
-    model.predict_physical. Retourne un dictionnaire sinn_data utilisable
+    Coordinates are in SI units; the call goes through
+    ``model.predict_``. Returns a dictionary usable directly
     directement par animate_comparison.
 
     Paramètres
     ----------
     model : SloshingPINN
-        Modèle déjà chargé (doit posséder une configuration model.cfg).
-    openfoam_data : str | dict
-        Chemin vers un .npz ou dictionnaire contenant X et time.
-    batch_size : int
-        Taille des lots pour l'inférence.
+        Loaded model (must have ``model`` configuration).
+    openfoam_data : str or dict
+        Path to an .npz file or dictionary containing ``X`` and
+        ``time``.
+    batch_size : int, optional
+        Batch size for inference. Default is 65536.
 
-    Retour
-    ------
+    Returns
+    -------
     dict
-        Dictionnaire avec les clés "time", "X", "alpha_eau".
+        Dictionary with keys ``"time"``, ``"X"``, ``"alpha_eau"``.
     """
     of = _load_animation_data(openfoam_data)
     X_of = np.asarray(of["X"], dtype=np.float32)      # (T, N, >=2)
@@ -292,48 +349,48 @@ def animate_comparison(
     display_animation=True,
 ):
     """
-    Compare les champs OpenFOAM et SINN côte à côte.
+    Compare OpenFOAM and SINN fields side by side.
 
-    Paramètres
+    Parameters
     ----------
-    openfoam_data : str ou dict
-        Chemin vers un .npz ou dictionnaire contenant X, alpha_eau,
-        time et éventuellement Fx.
-    sinn_data : str ou dict, optionnel
-        Même structure pour les prédictions SINN. Si None, un modèle
-        doit être fourni via model.
-    model : SloshingPINN, optionnel
-        Modèle déjà chargé. Si sinn_data est None, les prédictions SINN
-        sont générées à la volée à partir de ce modèle (via
+    openfoam_data : str or dict
+        Path to an .npz file or dictionary containing X, alpha_eau,
+        time and optionally Fx.
+    sinn_data : str or dict, optional
+        Same structure for SINN predictions. If None, a model must
+        be provided via model.
+    model : SloshingPINN, optional
+        Loaded model. If sinn_data is None, SINN predictions are
+        generated on the fly from this model (via
         build_sinn_data_from_model).
-    save_path : str ou None
-        Chemin de sortie .gif ou .mp4.
-    field : str
-        Nom du champ scalaire à comparer, par défaut 'alpha_eau'.
-    xlim, ylim : tuple
-        Limites spatiales communes aux deux panneaux.
-    interval : int
-        Durée entre images en millisecondes.
-    point_size : float
-        Taille des points du scatter.
-    show_forces : bool
-        Affiche les courbes Fx si les deux datasets les contiennent.
-    display_animation : bool
-        Affiche l'animation dans un notebook Jupyter.
+    save_path : str or None, optional
+        Output path for .gif or .mp4.
+    field : str, optional
+        Name of the scalar field to compare, default 'alpha_eau'.
+    xlim, ylim : tuple, optional
+        Common spatial limits for both panels.
+    interval : int, optional
+        Duration between frames in milliseconds.
+    point_size : float, optional
+        Size of scatter points.
+    show_forces : bool, optional
+        Display Fx curves if both datasets contain them.
+    display_animation : bool, optional
+        Display the animation in a Jupyter notebook.
 
-    Retour
-    ------
-    animation : FuncAnimation
-    fig : Figure
+    Returns
+    -------
+    animation : matplotlib.animation.FuncAnimation
+    fig : matplotlib.figure.Figure
     """
 
     if sinn_data is None and model is None:
         raise ValueError(
-            "Fournir soit sinn_data, soit model (au moins l'un des deux)."
+            "Provide either sinn_data or model (at least one of them)."
         )
     if sinn_data is not None and model is not None:
         raise ValueError(
-            "Fournir soit sinn_data, soit model, mais pas les deux."
+            "Provide either sinn_data or model, but not both."
         )
 
     of = _load_animation_data(openfoam_data)
@@ -344,17 +401,17 @@ def animate_comparison(
         sinn = _load_animation_data(sinn_data)
 
     # --------------------------------------------------------
-    # Chargement des données
+    # Data loading
     # --------------------------------------------------------
     for name, data in [("OpenFOAM", of), ("SINN", sinn)]:
         if "X" not in data or "time" not in data:
             raise ValueError(
-                f"{name} doit contenir les clés 'X' et 'time'."
+                f"{name} must contain keys 'X' and 'time'."
             )
 
         if field not in data:
             raise ValueError(
-                f"Champ '{field}' absent du dataset {name}."
+                f"Field '{field}' missing from dataset {name}."
             )
 
     X_of = np.asarray(of["X"])
@@ -367,44 +424,44 @@ def animate_comparison(
     t_sinn = np.asarray(sinn["time"]).reshape(-1)
 
     if X_of.ndim != 3 or X_of.shape[-1] < 2:
-        raise ValueError("OpenFOAM : X doit avoir la forme (T, N, 2).")
+        raise ValueError("OpenFOAM: X must have shape (T, N, 2).")
 
     if X_sinn.ndim != 3 or X_sinn.shape[-1] < 2:
-        raise ValueError("SINN : X doit avoir la forme (T, N, 2).")
+        raise ValueError("SINN: X must have shape (T, N, 2).")
 
     if A_of.shape[:2] != X_of.shape[:2]:
-        raise ValueError("OpenFOAM : dimensions de X et du champ incompatibles.")
+        raise ValueError("OpenFOAM: X and field dimensions are incompatible.")
 
     if A_sinn.shape[:2] != X_sinn.shape[:2]:
-        raise ValueError("SINN : dimensions de X et du champ incompatibles.")
+        raise ValueError("SINN: X and field dimensions are incompatible.")
 
     if len(t_of) != len(X_of) or len(t_sinn) != len(X_sinn):
-        raise ValueError("Les vecteurs de temps doivent correspondre à X.")
+        raise ValueError("Time vectors must match X.")
 
     if len(t_of) == 0 or len(t_sinn) == 0:
-        raise ValueError("Les datasets ne doivent pas être vides.")
+        raise ValueError("Datasets must not be empty.")
 
     if not np.all(np.isfinite(t_of)) or not np.all(np.isfinite(t_sinn)):
-        raise ValueError("Les vecteurs de temps contiennent des valeurs non finies.")
+        raise ValueError("Time vectors contain non-finite values.")
 
-    # On garde les temps OpenFOAM compris dans l'intervalle SINN.
+    # Keep OpenFOAM times within the SINN interval.
     valid = (t_of >= t_sinn.min()) & (t_of <= t_sinn.max())
     frame_indices = np.flatnonzero(valid)
 
     if len(frame_indices) == 0:
         raise ValueError(
-            "Les intervalles de temps OpenFOAM et SINN ne se recouvrent pas."
+            "OpenFOAM and SINN time intervals do not overlap."
         )
 
     times = t_of[frame_indices]
 
-    # Associe à chaque temps OpenFOAM l'instant SINN le plus proche.
+    # Associate each OpenFOAM time with the closest SINN instant.
     sinn_indices = np.abs(
         times[:, None] - t_sinn[None, :]
     ).argmin(axis=1)
 
     # --------------------------------------------------------
-    # Figure : deux champs en haut, forces en bas
+    # Figure: two fields on top, forces at bottom
     # --------------------------------------------------------
     has_forces = (
         show_forces
@@ -430,7 +487,7 @@ def animate_comparison(
         )
 
     # --------------------------------------------------------
-    # Champs scalaires : même échelle de couleurs
+    # Scalar fields: same colour scale
     # --------------------------------------------------------
     i0 = frame_indices[0]
     j0 = sinn_indices[0]
@@ -476,7 +533,7 @@ def animate_comparison(
         pad=0.03,
     )
 
-    title = fig.suptitle(f"Comparaison à t = {times[0]:.4f} s")
+    title = fig.suptitle(f"Comparison at t = {times[0]:.4f} s")
 
     # --------------------------------------------------------
     # Forces Fx
@@ -486,7 +543,7 @@ def animate_comparison(
         Fx_sinn = np.asarray(sinn["Fx"]).reshape(-1)
 
         if len(Fx_of) != len(t_of) or len(Fx_sinn) != len(t_sinn):
-            raise ValueError("Chaque série Fx doit avoir la longueur de son vecteur time.")
+            raise ValueError("Each Fx series must match its time vector length.")
 
         ax_force.plot(t_of, Fx_of, label="OpenFOAM", linewidth=1.5)
         ax_force.plot(t_sinn, Fx_sinn, label="SINN", linewidth=1.5)
@@ -510,7 +567,7 @@ def animate_comparison(
         ax_force.set_ylim(fmin - margin, fmax + margin)
 
     # --------------------------------------------------------
-    # Mise à jour de l'animation
+    # Animation update
     # --------------------------------------------------------
     def update(frame):
         i = frame_indices[frame]
@@ -523,7 +580,7 @@ def animate_comparison(
         scatter_sinn.set_array(A_sinn[j].reshape(-1))
 
         title.set_text(
-            f"Comparaison — t = {t_of[i]:.4f} s "
+            f"Comparison — t = {t_of[i]:.4f} s "
             f"(SINN : {t_sinn[j]:.4f} s)"
         )
 
@@ -545,7 +602,7 @@ def animate_comparison(
     )
 
     # --------------------------------------------------------
-    # Export facultatif
+    # Optional export
     # --------------------------------------------------------
     if save_path is not None:
         path = str(save_path)
@@ -554,7 +611,7 @@ def animate_comparison(
         elif path.lower().endswith(".mp4"):
             animation.save(path, writer=FFMpegWriter(fps=1000 / interval))
         else:
-            raise ValueError("Le fichier de sortie doit être .gif ou .mp4")
+            raise ValueError("Output file must be .gif or .mp4")
 
     if display_animation:
         plt.close(fig)
