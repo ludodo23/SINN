@@ -154,8 +154,35 @@ def plot_fields(
         y_max = float(cfg.y_max)
 
     device = next(model.parameters()).device
-    x = np.linspace(x_min, x_max, nx)
-    y = np.linspace(y_min, y_max, ny)
+
+    # Load OpenFOAM data for comparison if provided, so that the
+    # display grid (nx, ny) can be calibrated on the OpenFOAM "X".
+    of = None
+    X_of = None
+    t_of = None
+    i_t = None
+    if openfoam_data is not None:
+        of = _load_animation_data(openfoam_data)
+        if "X" not in of or "time" not in of:
+            raise ValueError(
+                "openfoam_data must contain keys 'X' and 'time'."
+            )
+        X_of = np.asarray(of["X"])
+        t_of = np.asarray(of["time"]).reshape(-1)
+        # Find the OpenFOAM time closest to t.
+        i_t = int(np.argmin(np.abs(t_of - t)))
+
+    if of is not None:
+        # Calibrate nx, ny on the OpenFOAM X (unique sorted coordinates).
+        xs = np.unique(np.round(X_of[0, :, 0], 9))
+        ys = np.unique(np.round(X_of[0, :, 1], 9))
+        x = xs
+        y = ys
+        nx = int(len(x))
+        ny = int(len(y))
+    else:
+        x = np.linspace(x_min, x_max, nx)
+        y = np.linspace(y_min, y_max, ny)
 
     X, Y = np.meshgrid(x, y)
     T = np.full_like(X, t)
@@ -173,18 +200,8 @@ def plot_fields(
 
     prediction = model.predict_physical(coords)
 
-    # Load OpenFOAM data for comparison if provided.
-    of = None
-    if openfoam_data is not None:
-        of = _load_animation_data(openfoam_data)
-        if "X" not in of or "time" not in of:
-            raise ValueError(
-                "openfoam_data must contain keys 'X' and 'time'."
-            )
-        X_of = np.asarray(of["X"])
-        t_of = np.asarray(of["time"]).reshape(-1)
-        # Find the OpenFOAM time closest to t.
-        i_t = int(np.argmin(np.abs(t_of - t)))
+    if isinstance(fields, str):
+        fields = (fields,)
 
     for field in fields:
         Z = prediction[field].cpu().numpy().reshape(ny, nx)
@@ -200,7 +217,7 @@ def plot_fields(
             plt.show()
         else:
             # Three panels: OpenFOAM, model, relative error.
-            Z_of = np.asarray(of[field])[i_t].reshape(ny, nx)
+            Z_of = np.asarray(of[field])[i_t].reshape(ny, nx, order="F")
             with np.errstate(divide="ignore", invalid="ignore"):
                 denom = np.maximum(np.abs(Z_of), 1e-12)
                 err = np.abs(Z - Z_of) / denom
@@ -292,7 +309,7 @@ def build_sinn_data_from_model(
     Returns
     -------
     dict
-        Dictionary with keys ``"time"``, ``"X"``, ``"alpha_eau"``.
+        Dictionary with keys ``"time"``, ``"X"``, ``"alpha"``.
     """
     of = _load_animation_data(openfoam_data)
     X_of = np.asarray(of["X"], dtype=np.float32)      # (T, N, >=2)
@@ -331,7 +348,7 @@ def build_sinn_data_from_model(
     return {
         "time": times,
         "X": X_of,
-        "alpha_eau": predictions["alpha"],
+        "alpha": predictions["alpha"],
     }
 
 
@@ -340,7 +357,7 @@ def animate_comparison(
     sinn_data=None,
     model=None,
     save_path=None,
-    field="alpha_eau",
+    field="alpha",
     xlim=(-2, 8),
     ylim=None,
     interval=30,
@@ -354,7 +371,7 @@ def animate_comparison(
     Parameters
     ----------
     openfoam_data : str or dict
-        Path to an .npz file or dictionary containing X, alpha_eau,
+        Path to an .npz file or dictionary containing X, alpha,
         time and optionally Fx.
     sinn_data : str or dict, optional
         Same structure for SINN predictions. If None, a model must
@@ -366,7 +383,7 @@ def animate_comparison(
     save_path : str or None, optional
         Output path for .gif or .mp4.
     field : str, optional
-        Name of the scalar field to compare, default 'alpha_eau'.
+        Name of the scalar field to compare, default 'alpha'.
     xlim, ylim : tuple, optional
         Common spatial limits for both panels.
     interval : int, optional
@@ -512,8 +529,8 @@ def animate_comparison(
         cmap="coolwarm",
     )
 
-    ax_of.set_title("OpenFOAM — interFoam")
-    ax_sinn.set_title("SINN — PINN")
+    ax_of.set_title("interFoam")
+    ax_sinn.set_title("PINN")
 
     for ax in (ax_of, ax_sinn):
         ax.set_xlabel("x [m]")
