@@ -279,7 +279,7 @@ def build_sinn_data_from_model(
     ``model.predict_``. Returns a dictionary usable directly
     directement par animate_comparison.
 
-    Paramètres
+    Parameters
     ----------
     model : SloshingPINN
         Loaded model (must have ``model`` configuration).
