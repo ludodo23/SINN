@@ -10,7 +10,24 @@ import torch
 from torch import nn
 
 class SloshingPINN(nn.Module):
-    """forward takes [x/Lref,y/Lref,t/Tref], returns u*, v*, p*, alpha."""
+    """Physics-informed neural network for 2D water–air sloshing.
+
+    The forward pass takes non-dimensional coordinates
+    ``[x/L_ref, y/L_ref, t/T_ref]`` and returns non-dimensional
+    outputs ``(u*, v*, p*, alpha)`` where ``alpha`` is passed through
+    a sigmoid activation to keep it in ``[0, 1]``.
+
+    Parameters
+    ----------
+    state_path : str or pathlib.Path, optional
+        Path to a ``.pt`` checkpoint file. If provided, model weights
+        are loaded from it. The checkpoint may contain a
+        ``model_state_dict`` key, be an ``nn.Module``, or be a raw
+        ``state_dict``.
+    config : str, pathlib.Path, dict, Config instance, or None, optional
+        Configuration source. Can be a JSON file path, a dictionary,
+        a ``Config`` instance, or ``None`` (uses default width/layers).
+    """
 
     def __init__(
         self,
@@ -19,7 +36,7 @@ class SloshingPINN(nn.Module):
     ):
         super().__init__()
 
-        # Résout la configuration : chemin JSON, objet Config/dict, ou None.
+        # Resolve configuration: JSON path, Config/dict object, or None.
         if isinstance(config, (str, Path)):
             config_path = Path(config)
             with config_path.open("r", encoding="utf-8") as f:
@@ -27,8 +44,8 @@ class SloshingPINN(nn.Module):
 
         self.cfg = config
 
-        # width et hidden_layers proviennent de la configuration uniquement
-        # (plus de double définition entre __init__ et config).
+        # Width and hidden_layers come from the configuration only
+        # (no double definition between __init__ and config).
         if self.cfg is None:
             width = 96
             hidden_layers = 5
@@ -53,8 +70,8 @@ class SloshingPINN(nn.Module):
         nn.init.xavier_uniform_(self.head.weight)
         nn.init.zeros_(self.head.bias)
 
-        # Charge les poids depuis un fichier .pt si un chemin est fourni.
-        # Suit la recommandation PyTorch : state_dict uniquement.
+        # Load weights from a .pt file if a path is provided.
+        # Follows PyTorch recommendation: state_dict only.
         if state_path is not None:
             state_path = Path(state_path)
             state = torch.load(state_path, map_location="cpu", weights_only=False)
@@ -66,6 +83,21 @@ class SloshingPINN(nn.Module):
                 self.load_state_dict(state)
 
     def forward(self, coords_star: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Forward pass.
+
+        Parameters
+        ----------
+        coords_star : torch.Tensor
+            Non-dimensional coordinates, shape ``(N, 3)`` with columns
+            ``(x*, y*, t*)``.
+
+        Returns
+        -------
+        dict of str to torch.Tensor
+            Dictionary with keys ``"u"``, ``"v"``, ``"p"``, ``"alpha"``,
+            each of shape ``(N, 1)``. ``alpha`` is passed through a
+            sigmoid to remain in ``[0, 1]``.
+        """
         if coords_star.ndim != 2 or coords_star.shape[1] != 3:
             raise ValueError("coords_star must have shape (N,3): [x*,y*,t*].")
         raw = self.head(self.backbone(coords_star))
@@ -73,7 +105,25 @@ class SloshingPINN(nn.Module):
                 "alpha": torch.sigmoid(raw[:, 3:4])}
 
     def predict_physical(self, coords_si: torch.Tensor) -> dict[str, torch.Tensor]:
-        """SI [x,y,t] in; SI u,v,p and dimensionless alpha out."""
+        """Predict physical quantities from SI coordinates.
+
+        Parameters
+        ----------
+        coords_si : torch.Tensor
+            SI coordinates, shape ``(N, 3)`` with columns ``(x, y, t)``.
+
+        Returns
+        -------
+        dict of str to torch.Tensor
+            Dictionary with keys ``"u"``, ``"v"``, ``"p"``, ``"alpha"``.
+            ``u`` and ``v`` are in [m/s], ``p`` is in [Pa], and
+            ``alpha`` is dimensionless in ``[0, 1]``.
+
+        Raises
+        ------
+        ValueError
+            If the model was built without a configuration.
+        """
         if self.cfg is None:
             raise ValueError("predict_physical requires the Config used to build the model.")
         if isinstance(self.cfg, dict):
@@ -92,11 +142,26 @@ class SloshingPINN(nn.Module):
 
 
 # ============================================================
-# Utilitaires de configuration
+# Configuration utilities
 # ============================================================
 
 def _get_config_value(cfg, name, default=None):
-    """Lit une propriété d'un dictionnaire ou d'un objet Config."""
+    """Read an attribute from a dictionary or a Config object.
+
+    Parameters
+    ----------
+    cfg : dict or object
+        Configuration object (dict, Config instance, or similar).
+    name : str
+        Attribute or key name to read.
+    default : object, optional
+        Value returned if the attribute is not found. Default is None.
+
+    Returns
+    -------
+    object
+        The configuration value, or ``default`` if not found.
+    """
     if isinstance(cfg, dict):
         if name in cfg:
             return cfg[name]
@@ -122,25 +187,47 @@ def _get_config_value(cfg, name, default=None):
 
 
 def _load_config(config=None, config_path=None, config_class=None):
-    """
-    Accepte :
-      - une instance de configuration ;
-      - une classe Config et config_path ;
-      - un chemin JSON directement ;
-      - un dictionnaire déjà chargé.
+    """Load a configuration from various input types.
 
-    Si une classe Config est fournie, utilise sa méthode load_json.
+    Accepts:
+    - a configuration instance;
+    - a Config class and config_path;
+    - a JSON file path directly;
+    - a dictionary already loaded.
+
+    If a Config class is provided, its ``load_json`` method is used.
+
+    Parameters
+    ----------
+    config : object, str, pathlib.Path, or None, optional
+        Configuration instance, class, JSON path, or dictionary.
+    config_path : str or pathlib.Path, optional
+        Path to a JSON configuration file.
+    config_class : type, optional
+        Config class with a ``load_json`` classmethod.
+
+    Returns
+    -------
+    object
+        Loaded configuration instance or dictionary.
+
+    Raises
+    ------
+    ValueError
+        If both ``config`` (as a path) and ``config_path`` are provided,
+        or if no configuration source is given.
+    FileNotFoundError
+        If the configuration file does not exist.
     """
     if isinstance(config, (str, Path)):
         if config_path is not None:
             raise ValueError(
-                "Ne fournis pas simultanément un chemin dans config "
-                "et dans config_path."
+                "Do not provide both a path in config and in config_path."
             )
         config_path = config
         config = None
 
-    # Autorise config=Config, si Config est une classe.
+    # Allow config=Config if Config is a class.
     if isinstance(config, type):
         config_class = config
         config = None
@@ -148,7 +235,7 @@ def _load_config(config=None, config_path=None, config_class=None):
     if config_path is None:
         if config is None:
             raise ValueError(
-                "Fournis une instance Config ou un chemin config_path."
+                "Provide a Config instance or a config_path."
             )
         return config
 
@@ -156,7 +243,7 @@ def _load_config(config=None, config_path=None, config_class=None):
 
     if not config_path.is_file():
         raise FileNotFoundError(
-            f"Fichier de configuration introuvable : {config_path}"
+            f"Configuration file not found: {config_path}"
         )
 
     if config_class is not None:
@@ -164,27 +251,26 @@ def _load_config(config=None, config_path=None, config_class=None):
         if loaded is not None:
             return loaded
 
-        # Certaines méthodes load_json modifient l'instance en place.
+        # Some load_json methods modify the instance in place.
         if config is not None:
             return config
 
         raise ValueError(
-            "Config.load_json() n'a rien retourné. "
-            "Passe une instance Config si load_json modifie celle-ci."
+            "Config.load_json() returned nothing. "
+            "Pass a Config instance if load_json modifies it in place."
         )
 
     if config is not None and hasattr(config, "load_json"):
         loaded = config.load_json(str(config_path))
         return loaded if loaded is not None else config
 
-    # Fallback : lecture JSON standard, si aucune classe Config
-    # n'est fournie.
+    # Fallback: standard JSON reading, if no Config class is provided.
     with open(config_path, "r", encoding="utf-8") as file:
         return json.load(file)
 
 
 # ============================================================
-# Génération du dataset SINN
+# SINN dataset generation
 # ============================================================
 
 def generate_sinn_npz(
@@ -195,45 +281,38 @@ def generate_sinn_npz(
     device=None,
     batch_size=65536,
 ):
-    """
-    Évalue le modèle SINN aux mêmes coordonnées et instants
-    que le dataset OpenFOAM et sauvegarde les champs prédits.
+    """Evaluate the SINN model at the same coordinates and times
+    as the OpenFOAM dataset and save the predicted fields.
 
-    Paramètres
+    Parameters
     ----------
-    openfoam_npz : str | Path
-        NPZ produit par l'extracteur OpenFOAM. Doit contenir
-        au minimum 'X' et 'time'.
+    openfoam_npz : str or pathlib.Path
+        NPZ file produced by the OpenFOAM extractor. Must contain at
+        least ``'X'`` and ``'time'``.
+    output_npz : str, pathlib.Path, or None, optional
+        Destination NPZ file. Defaults to
+        ``<OpenFOAM NPZ folder>/sinn_data.npz``.
+    model : SloshingPINN or None, optional
+        Already instantiated model. If None, the model is created from
+        the configuration and checkpoint weights.
+    checkpoint : str, pathlib.Path, or None, optional
+        Path to a ``.pt`` checkpoint. May contain ``model_state_dict``
+        and ``config``, or only a state_dict.
+    device : str or torch.device or None, optional
+        Inference device. Defaults to CUDA if available, else CPU.
+    batch_size : int, optional
+        Maximum number of points processed per batch. Default is 65536.
 
-    output_npz : str | Path | None
-        Destination du NPZ SINN. Par défaut :
-        <dossier du NPZ OpenFOAM>/sinn_data.npz.
-
-    model : SloshingPINN | None
-        Modèle déjà instancié. Sinon, le modèle est créé à partir
-        de la configuration et des poids du checkpoint.
-
-    checkpoint : str | Path | None
-        Chemin du checkpoint .pt. Peut contenir model_state_dict
-        et config, ou seulement un state_dict.
-
-    device : str | torch.device | None
-        Appareil d'inférence.
-
-    batch_size : int
-        Nombre maximal de points traités par lot.
-
-    Retour
-    ------
-    Path
-        Chemin absolu du fichier NPZ créé.
+    Returns
+    -------
+    pathlib.Path
+        Absolute path to the created NPZ file.
 
     Notes
     -----
-    Les coordonnées x, y et le temps sont passés au réseau dans
-    leurs unités physiques, comme dans plot_fields(). Si train.py
-    normalise les entrées, il faut appliquer ici exactement la
-    même normalisation.
+    Coordinates ``x``, ``y`` and time are passed to the network in
+    their physical units, as in ``plot_fields()``. If ``train.py``
+    normalises the inputs, the same normalisation must be applied here.
     """
 
     # --------------------------------------------------------
@@ -255,14 +334,14 @@ def generate_sinn_npz(
 
     with np.load(input_file) as data:
         if "X" not in data or "time" not in data:
-            raise KeyError("Le NPZ OpenFOAM doit contenir X et time.")
+            raise KeyError("The OpenFOAM NPZ must contain X and time.")
 
         X = np.asarray(data["X"], dtype=np.float32)
         times = np.asarray(data["time"], dtype=np.float32).reshape(-1)
 
     if X.ndim != 3 or X.shape[-1] < 2:
         raise ValueError(
-            f"X doit avoir la forme (T, N, 2 ou 3), reçu {X.shape}."
+            f"X must have shape (T, N, 2 or 3), received {X.shape}."
         )
 
     if X.shape[0] != len(times):
@@ -272,7 +351,7 @@ def generate_sinn_npz(
         raise ValueError("X ou time contient des valeurs non finies.")
 
     if batch_size < 1:
-        raise ValueError("batch_size doit être supérieur à zéro.")
+        raise ValueError("batch_size must be greater than zero.")
 
     n_times, n_points, _ = X.shape
 

@@ -7,9 +7,29 @@ DIR = Path(__file__).parent
 CASE = DIR / "../sloshing/sloshing"
 OUTPUT = DIR / "../data/sloshing_data.npz"
 
-def build_dataset(case : Path = CASE, output : Path = OUTPUT):
-    """
-    Extrait les données CFD d'un cas OpenFOAM et les sauvegarde dans un fichier compressé.
+
+def build_dataset(case: Path = CASE, output: Path = OUTPUT):
+    """Extract CFD data from an OpenFOAM case and save it to a compressed file.
+
+    Parameters
+    ----------
+    case : pathlib.Path, optional
+        Path to the OpenFOAM case directory. Default is
+        ``../sloshing/sloshing`` relative to this file.
+    output : pathlib.Path, optional
+        Path to the output compressed ``.npz`` file. Default is
+        ``../data/sloshing_data.npz`` relative to this file.
+
+    Returns
+    -------
+    None
+        The dataset is saved to disk; nothing is returned.
+
+    Notes
+    -----
+    Reads cell-centered fields (alpha.eau, U, p_rgh, k, epsilon) at all
+    available time steps, synchronises them with force and moment data,
+    and saves the synchronised dataset as a compressed NPZ file.
     """
 
     # ============================================================
@@ -29,7 +49,7 @@ def build_dataset(case : Path = CASE, output : Path = OUTPUT):
 
 
     # ============================================================
-    # Champs CFD
+    # CFD fields
     # ============================================================
 
     X_all = []

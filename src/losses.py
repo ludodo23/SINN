@@ -8,54 +8,55 @@ from physics import (
 
 
 def mse(value):
-    """
-    Calcule la moyenne des carrés d'un résidu adimensionné.
+    """Compute the mean squared error of a non-dimensional residual.
 
-    Formule :
+    Formula::
+
         MSE(r) = (1/N) * sum(r_i**2)
 
-    Paramètres
+    Parameters
     ----------
     value : torch.Tensor
-        Résidu physique adimensionné.
+        Non-dimensional physical residual.
 
-    Retour
-    ------
+    Returns
+    -------
     torch.Tensor
-        Perte scalaire sans dimension.
+        Scalar non-dimensional loss.
     """
     return torch.mean(value**2)
 
 
 def continuity_loss(model, points, cfg):
-    """
-    Pénalise la violation de la conservation de la masse
-    pour un écoulement incompressible bidimensionnel.
+    """Penalise mass conservation violation for 2D incompressible flow.
 
-    Équation adimensionnée :
+    Non-dimensional equation::
+
         du*/dx* + dv*/dy* = 0
 
-    Résidu :
+    Residual::
+
         r_cont = du*/dx* + dv*/dy*
 
-    Perte :
+    Loss::
+
         L_cont = MSE(r_cont)
 
-    Les coordonnées et les vitesses doivent être adimensionnées.
+    Coordinates and velocities must be non-dimensional.
 
-    Paramètres
+    Parameters
     ----------
     model : torch.nn.Module
-        Réseau prédisant u* et v*.
+        Network predicting u* and v*.
     points : torch.Tensor
-        Points de collocation (N, 3) : (x*, y*, t*).
-    cfg
-        Configuration du problème.
+        Collocation points, shape ``(N, 3)`` with columns ``(x*, y*, t*)``.
+    cfg : object
+        Problem configuration.
 
-    Retour
-    ------
+    Returns
+    -------
     torch.Tensor
-        Perte adimensionnée de continuité.
+        Non-dimensional continuity loss.
     """
     c = points.detach().clone().requires_grad_(True)
     f = model(c)
@@ -63,7 +64,7 @@ def continuity_loss(model, points, cfg):
     du = grad(f["u"], c)
     dv = grad(f["v"], c)
 
-    # Divergence du champ de vitesse adimensionné.
+    # Divergence of the non-dimensional velocity field.
     residual = du[:, 0:1] + dv[:, 1:2]
 
     return mse(residual)
@@ -71,11 +72,23 @@ def continuity_loss(model, points, cfg):
 
 
 def volume_fraction_loss(model, points, cfg=None):
-    """
-    Transport conservatif de la fraction volumique :
+    """Conservative volume fraction transport:
+
         d(alpha)/dt* + div*(alpha u*) = 0
 
-    points : (N, 3), colonnes (x*, y*, t*).
+    Parameters
+    ----------
+    model : torch.nn.Module
+        Network predicting alpha, u, v.
+    points : torch.Tensor
+        Points, shape ``(N, 3)`` with columns ``(x*, y*, t*)``.
+    cfg : object, optional
+        Problem configuration (unused in the residual itself).
+
+    Returns
+    -------
+    torch.Tensor
+        Non-dimensional volume fraction loss.
     """
     c = points.detach().clone().requires_grad_(True)
     f = model(c)
@@ -98,89 +111,88 @@ def volume_fraction_loss(model, points, cfg=None):
 
 
 def momentum_loss(model, points, cfg):
-    """
-    Pénalise la violation des équations de quantité de mouvement
-    adimensionnées pour un écoulement eau-air laminaire.
+    """Penalise violation of non-dimensional momentum equations
+    for laminar water–air flow.
 
-    Équation vectorielle :
-        rho* Du*/Dt*
-        = -grad(p*)
-          + (1/Re) div(tau*)
-          + (rho*/Fr**2) b*
-          + (1/We) kappa* grad(alpha)
+    Vector equation::
 
-    Tenseur des contraintes visqueuses :
+        rho* Du*/Dt* = -grad(p*) + (1/Re) div(tau*)
+                       + (rho*/Fr**2) b* + (1/We) kappa* grad(alpha)
+
+    Viscous stress tensor::
+
         tau* = mu* [grad(u*) + grad(u*)^T]
 
-    où :
+    where::
+
         rho* = rho / rho_ref
         mu*  = mu / mu_ref
         Re   = rho_ref U_ref L_ref / mu_ref
         Fr   = U_ref / sqrt(g_ref L_ref)
         We   = rho_ref U_ref**2 L_ref / sigma
 
-    Accélération matérielle :
+    Material acceleration::
+
         Du*/Dt* = du*/dt* + u* du*/dx* + v* du*/dy*
         Dv*/Dt* = dv*/dt* + u* dv*/dx* + v* dv*/dy*
 
-    Courbure et force capillaire CSF :
+    Curvature and CSF surface tension force::
+
         n = grad(alpha) / |grad(alpha)|
         kappa* = -div(n)
         f_sigma* = kappa* grad(alpha)
 
-    L'accélération b* est l'accélération effective divisée par
-    gravity_ref. Pour un réservoir accéléré et un axe y orienté
-    vers le haut :
+    The effective acceleration b* is the effective acceleration divided by
+    gravity_ref. For an accelerated tank with y-axis pointing upward::
+
         b_x* = -a_tank / gravity_ref
         b_y* = gravity_y / gravity_ref
 
-    Résidus :
-        r_x = rho* Du*/Dt* + dp*/dx*
-              - div(tau*)_x / Re
-              - rho* b_x* / Fr**2
-              - kappa* alpha_x* / We
+    Residuals::
 
-        r_y = rho* Dv*/Dt* + dp*/dy*
-              - div(tau*)_y / Re
-              - rho* b_y* / Fr**2
-              - kappa* alpha_y* / We
+        r_x = rho* Du*/Dt* + dp*/dx* - div(tau*)_x / Re
+              - rho* b_x* / Fr**2 - kappa* alpha_x* / We
 
-    Perte :
+        r_y = rho* Dv*/Dt* + dp*/dy* - div(tau*)_y / Re
+              - rho* b_y* / Fr**2 - kappa* alpha_y* / We
+
+    Loss::
+
         L_momentum = MSE(r_x) + MSE(r_y)
 
-    IMPORTANT
-    ----------
-    Les entrées et sorties du réseau doivent être adimensionnées.
-    La fonction mixture_properties doit renvoyer rho et mu dans
-    les unités physiques utilisées pour rho_ref et mu_ref.
-    La convention de signe de la courbure doit rester cohérente
-    avec celle de la force capillaire.
+    Notes
+    -----
+    Network inputs and outputs must be non-dimensional.
+    ``mixture_properties`` must return rho and mu in the physical units
+    used for rho_ref and mu_ref.
+    The curvature sign convention must remain consistent with the
+    surface tension force.
 
-    Paramètres
+    Parameters
     ----------
     model : torch.nn.Module
-        Réseau prédisant u*, v*, p* et alpha.
+        Network predicting u*, v*, p* and alpha.
     points : torch.Tensor
-        Points de collocation (N, 3) : (x*, y*, t*).
-    cfg
-        Configuration contenant Re, Fr, We, rho_ref, mu_ref,
-        gravity_ref et les propriétés physiques du mélange.
+        Collocation points, shape ``(N, 3)`` with columns ``(x*, y*, t*)``.
+    cfg : object
+        Configuration containing Re, Fr, We, rho_ref, mu_ref,
+        gravity_ref and mixture physical properties.
 
-    Retour
-    ------
+    Returns
+    -------
     torch.Tensor
-        Perte adimensionnée de quantité de mouvement.
+        Non-dimensional momentum loss.
     """
     c = points.detach().clone().requires_grad_(True)
     f = model(c)
 
-    # Dérivées des champs par rapport à x*, y* et t*.
+    # Derivatives of fields with respect to x*, y* and t*.
     d = {
         name: grad(value, c)
         for name, value in f.items()
     }
 
-    # Propriétés du mélange en unités physiques, puis adimensionnées.
+    # Mixture properties in physical units, then non-dimensionalised.
     rho, mu = mixture_properties(f["alpha"], cfg)
     rho_star = rho / cfg.rho_ref
     mu_star = mu / cfg.mu_ref
@@ -198,9 +210,9 @@ def momentum_loss(model, points, cfg):
     px = d["p"][:, 0:1]
     py = d["p"][:, 1:2]
 
-    # Contraintes visqueuses adimensionnées avec viscosité variable.
-    # On conserve mu* à l'intérieur de la divergence : ses gradients
-    # spatiaux ne doivent pas être négligés à l'interface eau-air.
+    # Non-dimensional viscous stresses with variable viscosity.
+    # mu* is kept inside the divergence: its spatial gradients must not
+    # be neglected at the water–air interface.
     tau_xx = 2.0 * mu_star * ux
     tau_yy = 2.0 * mu_star * vy
     tau_xy = mu_star * (uy + vx)
@@ -215,8 +227,8 @@ def momentum_loss(model, points, cfg):
         + grad(tau_yy, c)[:, 1:2]
     )
 
-    # Accélération effective dans le repère du réservoir.
-    # gravity_y doit être exprimé avec le même signe que l'axe y.
+    # Effective acceleration in the tank reference frame.
+    # gravity_y must be expressed with the same sign as the y-axis.
     t_physical = c[:, 2:3] * cfg.time_ref
     a_tank = tank_acceleration(t_physical, cfg)
     b_x_star = -a_tank / cfg.gravity_ref
@@ -225,8 +237,7 @@ def momentum_loss(model, points, cfg):
         + cfg.gravity_y / cfg.gravity_ref
     )
 
-    # Force capillaire CSF :
-    # la normale est calculée à partir du gradient de alpha.
+    # CSF surface tension force: normal computed from alpha gradient.
     da = d["alpha"]
     alpha_x = da[:, 0:1]
     alpha_y = da[:, 1:2]
@@ -238,17 +249,17 @@ def momentum_loss(model, points, cfg):
     nx = alpha_x / grad_alpha_norm
     ny = alpha_y / grad_alpha_norm
 
-    # Courbure adimensionnée selon la convention kappa* = -div(n).
+    # Non-dimensional curvature with convention kappa* = -div(n).
     curvature = -(
         grad(nx, c)[:, 0:1]
         + grad(ny, c)[:, 1:2]
     )
 
-    # Dérivées matérielles adimensionnées.
+    # Non-dimensional material derivatives.
     adv_u = ut + u * ux + v * uy
     adv_v = vt + u * vx + v * vy
 
-    # Résidus : tous les termes sont désormais sans dimension.
+    # Residuals: all terms are now non-dimensional.
     rx = (
         rho_star * adv_u
         + px
@@ -269,39 +280,38 @@ def momentum_loss(model, points, cfg):
 
 
 def initial_loss(model, points, cfg):
-    """
-    Pénalise la violation des conditions initiales adimensionnées.
+    """Penalise violation of non-dimensional initial conditions.
 
-    Hypothèses :
+    Assumptions::
+
         u*(x*, y*, 0) = 0
         v*(x*, y*, 0) = 0
 
-    Profil initial lissé de fraction volumique :
-        alpha_0(y*) = sigmoid(
-            (initial_level - y*) / interface_smoothing
-        )
+    Smoothed initial volume fraction profile::
 
-    Perte :
-        L_initial = MSE(u*) + MSE(v*)
-                    + MSE(alpha - alpha_0)
+        alpha_0(y*) = sigmoid((initial_level - y*) / interface_smoothing)
 
-    initial_level et interface_smoothing doivent être exprimés
-    dans les coordonnées adimensionnées du réseau.
+    Loss::
 
-    Paramètres
+        L_initial = MSE(u*) + MSE(v*) + MSE(alpha - alpha_0)
+
+    ``initial_level`` and ``interface_smoothing`` must be expressed in
+    the network's non-dimensional coordinates.
+
+    Parameters
     ----------
     model : torch.nn.Module
-        Réseau prédisant u*, v* et alpha.
+        Network predicting u*, v* and alpha.
     points : torch.Tensor
-        Points d'évaluation des conditions initiales.
-    cfg
-        Configuration contenant le niveau initial et le
-        paramètre de lissage adimensionnés.
+        Points for evaluating initial conditions.
+    cfg : object
+        Configuration containing the non-dimensional initial level and
+        smoothing parameter.
 
-    Retour
-    ------
+    Returns
+    -------
     torch.Tensor
-        Perte adimensionnée des conditions initiales.
+        Non-dimensional initial condition loss.
     """
     f = model(points)
     level_star = cfg.initial_level / cfg.length_ref
@@ -321,61 +331,61 @@ def initial_loss(model, points, cfg):
 
 
 def wall_loss(model, points, cfg):
-    """
-    Pénalise la violation de la condition de non-glissement
-    sur des parois fixes.
+    """Penalise violation of the no-slip condition on fixed walls.
 
-    Conditions :
+    Conditions::
+
         u* = 0
         v* = 0
 
-    Perte :
+    Loss::
+
         L_wall = MSE(u*) + MSE(v*)
 
-    Les points doivent appartenir aux parois concernées.
-    Pour une paroi mobile, il faut imposer la vitesse de paroi
-    adimensionnée dans le repère choisi.
+    Points must belong to the relevant walls. For a moving wall, the
+    non-dimensional wall velocity must be imposed in the chosen frame.
 
-    Paramètres
+    Parameters
     ----------
     model : torch.nn.Module
-        Réseau prédisant u* et v*.
+        Network predicting u* and v*.
     points : torch.Tensor
-        Points de bord adimensionnés (x*, y*, t*).
+        Non-dimensional boundary points, shape ``(N, 3)`` with columns
+        ``(x*, y*, t*)``.
 
-    Retour
-    ------
+    Returns
+    -------
     torch.Tensor
-        Perte adimensionnée aux parois.
+        Non-dimensional wall loss.
     """
     f = model(points)
     return mse(f["u"]) + mse(f["v"])
 
 
 def pressure_gauge_loss(model, point, cfg):
-    """
-    Fixe la référence de pression adimensionnée en un point.
+    """Fix the non-dimensional pressure reference at a point.
 
-    Condition :
+    Condition::
+
         p*(x_ref*, y_ref*, t_ref*) = 0
 
-    Perte :
+    Loss::
+
         L_pressure = MSE(p*)
 
-    Cette condition supprime l'indétermination additive de la
-    pression. Elle ne signifie pas que la pression est nulle
-    dans tout le domaine.
+    This condition removes the additive indeterminacy of pressure.
+    It does not mean pressure is zero everywhere in the domain.
 
-    Paramètres
+    Parameters
     ----------
     model : torch.nn.Module
-        Réseau prédisant la pression adimensionnée p*.
+        Network predicting non-dimensional pressure p*.
     point : torch.Tensor
-        Point de référence adimensionné.
+        Non-dimensional reference point.
 
-    Retour
-    ------
+    Returns
+    -------
     torch.Tensor
-        Perte adimensionnée de jauge de pression.
+        Non-dimensional pressure gauge loss.
     """
     return mse(model(point)["p"])

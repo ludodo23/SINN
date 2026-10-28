@@ -8,6 +8,69 @@ from pathlib import Path
 
 @dataclass
 class Config:
+    """Physical and numerical configuration for the Sloshing PINN.
+
+    Attributes
+    ----------
+    x_min, x_max : float
+        Physical domain bounds in x [m].
+    y_min, y_max : float
+        Physical domain bounds in y [m].
+    t_min, t_max : float
+        Time interval [s].
+    rho_water, rho_air : float
+        Phase densities [kg/m^3].
+    nu_water, nu_air : float
+        Phase kinematic viscosities [m^2/s].
+    sigma : float
+        Surface tension coefficient [N/m].
+    gravity_y : float
+        Vertical gravity component [m/s^2].
+    length_ref, velocity_ref : float
+        Reference length and velocity for non-dimensionalisation.
+    rho_ref, mu_ref : float
+        Reference density [kg/m^3] and dynamic viscosity [Pa.s].
+    gravity_ref : float
+        Reference gravity magnitude [m/s^2].
+    tank_amplitude : float
+        Horizontal tank motion amplitude [m].
+    tank_omega : float
+        Tank motion angular frequency [rad/s].
+    tank_phase : float
+        Tank motion phase shift [rad].
+    initial_level : float
+        Initial free-surface level [m].
+    interface_smoothing : float
+        Interface smoothing thickness [m].
+    hidden_width : int
+        Number of hidden units per layer.
+    hidden_layers : int
+        Number of hidden layers.
+    n_collocation : int
+        Number of interior collocation points.
+    n_initial : int
+        Number of initial-condition points.
+    n_wall : int
+        Number of wall boundary points.
+    learning_rate : float
+        Adam optimiser learning rate.
+    epochs : int
+        Number of training epochs.
+    print_every : int
+        Print loss every N epochs.
+    seed : int
+        Random seed.
+    device : str
+        PyTorch device ("cpu" or "cuda").
+    w_continuity, w_vof, w_momentum : float
+        Loss weights for physics residuals.
+    w_initial : float
+        Loss weight for initial conditions.
+    w_wall : float
+        Loss weight for wall boundary conditions.
+    w_pressure_gauge : float
+        Loss weight for pressure gauge condition.
+    """
     # Domaine physique SI
     x_min: float = 0.0
     x_max: float = 6.0
@@ -65,18 +128,22 @@ class Config:
 
     @property
     def mu_water(self):
+        """Dynamic viscosity of water [Pa.s]."""
         return self.rho_water * self.nu_water
 
     @property
     def mu_air(self):
+        """Dynamic viscosity of air [Pa.s]."""
         return self.rho_air * self.nu_air
 
     @property
     def time_ref(self):
+        """Reference time scale [s]."""
         return self.length_ref / self.velocity_ref
 
     @property
     def Re(self):
+        """Reynolds number based on reference scales."""
         return (
             self.rho_ref * self.velocity_ref * self.length_ref
             / self.mu_ref
@@ -84,18 +151,27 @@ class Config:
 
     @property
     def Fr(self):
+        """Froude number based on reference scales."""
         return self.velocity_ref / (
             self.gravity_ref * self.length_ref
         ) ** 0.5
 
     @property
     def We(self):
+        """Weber number based on reference scales."""
         return (
             self.rho_ref * self.velocity_ref**2 * self.length_ref
             / self.sigma
         )
 
     def validate(self):
+        """Validate configuration parameters.
+
+        Returns
+        -------
+        Config
+            The validated configuration instance (self).
+        """
         assert self.x_max > self.x_min
         assert self.y_max > self.y_min
         assert self.t_max > self.t_min
@@ -116,6 +192,13 @@ class Config:
         return self
 
     def save_json(self, filepath="config.json"):
+        """Save configuration to a JSON file.
+
+        Parameters
+        ----------
+        filepath : str or pathlib.Path, optional
+            Path to the output JSON file. Default is "config.json".
+        """
         filepath = Path(filepath)
         filepath.parent.mkdir(parents=True, exist_ok=True)
 
@@ -124,6 +207,20 @@ class Config:
 
     @classmethod
     def load_json(cls, filepath="config.json", validate=True):
+        """Load configuration from a JSON file.
+
+        Parameters
+        ----------
+        filepath : str or pathlib.Path, optional
+            Path to the JSON configuration file. Default is "config.json".
+        validate : bool, optional
+            If True, validate the loaded configuration. Default is True.
+
+        Returns
+        -------
+        Config
+            Configuration instance loaded from the file.
+        """
         filepath = Path(filepath)
 
         with filepath.open("r", encoding="utf-8") as f:
@@ -131,7 +228,7 @@ class Config:
 
         if not isinstance(data, dict):
             raise ValueError(
-                "Le fichier JSON doit contenir un objet de configuration."
+                "The JSON file must contain a configuration object."
             )
 
         valid_keys = {f.name for f in fields(cls)}

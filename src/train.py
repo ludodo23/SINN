@@ -14,24 +14,70 @@ from losses import (continuity_loss, volume_fraction_loss, momentum_loss,
                     initial_loss, wall_loss, pressure_gauge_loss)
 
 def set_seed(seed: int) -> None:
-    random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
-    if torch.cuda.is_available(): torch.cuda.manual_seed_all(seed)
+    """Set random seeds for reproducibility.
+
+    Parameters
+    ----------
+    seed : int
+        Random seed value.
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 def config_dict(cfg) -> dict:
-    if is_dataclass(cfg): return asdict(cfg)
-    if hasattr(cfg, "__dict__"): return dict(cfg.__dict__)
+    """Convert a configuration object to a dictionary.
+
+    Parameters
+    ----------
+    cfg : object
+        Configuration object (dataclass or object with ``__dict__``).
+
+    Returns
+    -------
+    dict
+        Dictionary representation of the configuration.
+
+    Raises
+    ------
+    TypeError
+        If ``cfg`` is neither a dataclass nor exposes ``__dict__``.
+    """
+    if is_dataclass(cfg):
+        return asdict(cfg)
+    if hasattr(cfg, "__dict__"):
+        return dict(cfg.__dict__)
     raise TypeError("Config must be a dataclass or expose __dict__.")
 
 def _validate_scales(cfg) -> None:
+    """Validate that reference scales are present and positive.
+
+    Parameters
+    ----------
+    cfg : object
+        Configuration object.
+
+    Raises
+    ------
+    AttributeError
+        If required reference scales are missing.
+    ValueError
+        If any reference scale is not positive.
+    """
     names = ("length_ref", "velocity_ref", "rho_ref", "mu_ref", "gravity_ref")
     missing = [n for n in names if not hasattr(cfg, n)]
     if missing:
-        raise AttributeError("Add these positive reference scales to config.py: " +
-                             ", ".join(missing))
+        raise AttributeError(
+            "Add these positive reference scales to config.py: "
+            + ", ".join(names)
+        )
     for n in names:
-        if float(getattr(cfg, n)) <= 0: raise ValueError(f"{n} must be positive.")
+        if float(getattr(cfg, n)) <= 0:
+            raise ValueError(f"{n} must be positive.")
     if not hasattr(cfg, "time_ref"):
-        cfg.time_ref = float(cfg.length_ref)/float(cfg.velocity_ref)
+        cfg.time_ref = float(cfg.length_ref) / float(cfg.velocity_ref)
 
 def train(
     cfg: Config | None = None,
@@ -41,6 +87,37 @@ def train(
     optimizer: torch.optim.Optimizer | None = None,
     epochs: int | None = None,
 ):
+    """Train the dimensionless laminar sloshing PINN.
+
+    Parameters
+    ----------
+    cfg : Config, optional
+        Configuration object. If None, a default ``Config()`` is used.
+    output_dir : str or pathlib.Path, optional
+        Root output directory. A timestamped subdirectory is created
+        inside it. Default is ``"runs"``.
+    model : SloshingPINN, optional
+        Pre-instantiated model. If None, a new model is built from
+        ``cfg`` and ``state_path``.
+    state_path : str or pathlib.Path, optional
+        Path to a ``.pt`` checkpoint to initialise model weights.
+    optimizer : torch.optim.Optimizer, optional
+        Optimiser for training. If None, Adam is used with
+        ``cfg.learning_rate``.
+    epochs : int, optional
+        Number of training epochs. If None, ``cfg.epochs`` is used.
+
+    Returns
+    -------
+    model : SloshingPINN
+        Trained model.
+    history : list of dict
+        Training history with one entry per epoch containing keys
+        ``epoch``, ``total``, ``continuity``, ``vof``, ``momentum``,
+        ``initial``, ``wall``, ``pressure_gauge``.
+    run_dir : pathlib.Path
+        Directory where checkpoints and logs are saved.
+    """
     cfg = cfg or Config()
     if hasattr(cfg, "validate"): cfg.validate()
     _validate_scales(cfg)
