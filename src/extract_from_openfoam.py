@@ -1,6 +1,27 @@
 from pathlib import Path
+import re
 import numpy as np
 import pyvista as pv
+
+
+def read_gravity(case: Path) -> np.ndarray:
+    """Read the gravity vector from an OpenFOAM case (constant/g)."""
+    g_file = case / "constant" / "g"
+    text = g_file.read_text()
+    m = re.search(r"value\s*\(\s*([^)]+)\)", text)
+    if not m:
+        raise ValueError(f"Could not parse gravity from {g_file}")
+    return np.asarray([float(v) for v in m.group(1).split()], dtype=float)
+
+
+def read_gravity(case: Path) -> np.ndarray:
+    """Read the gravity vector from an OpenFOAM case (constant/g)."""
+    g_file = case / "constant" / "g"
+    text = g_file.read_text()
+    m = re.search(r"value\s*\(\s*([^)]+)\)", text)
+    if not m:
+        raise ValueError(f"Could not parse gravity from {g_file}")
+    return np.asarray([float(v) for v in m.group(1).split()], dtype=float)
 
 
 DIR = Path(__file__).parent
@@ -54,8 +75,11 @@ def build_dataset(case: Path = CASE, output: Path = OUTPUT):
 
     X_all = []
     alpha_all = []
-    U_all = []
+    u_all = []
+    v_all = []
+    w_all = []
     p_all = []
+    p_rgh_all = []
     k_all = []
     epsilon_all = []
 
@@ -73,22 +97,37 @@ def build_dataset(case: Path = CASE, output: Path = OUTPUT):
 
         alpha = np.asarray(mesh["alpha.eau"])
         U = np.asarray(mesh["U"])
-        p = np.asarray(mesh["p_rgh"])
+        u = np.asarray(U[:, 0])
+        v = np.asarray(U[:, 1])
+        w = np.asarray(U[:, 2])
+        p_rgh = np.asarray(mesh["p_rgh"])
+        # Mixture density (water/air) consistent with src/physics.py
+        rho_water = 998.0
+        rho_air = 1.21
+        rho = alpha * rho_water + (1.0 - alpha) * rho_air
+        g_vec = read_gravity(case)
+        p = p_rgh + rho * (centers @ g_vec)
         k = np.asarray(mesh["k"])
         epsilon = np.asarray(mesh["epsilon"])
 
         X_all.append(centers)
         alpha_all.append(alpha)
-        U_all.append(U)
+        u_all.append(u)
+        v_all.append(v)
+        w_all.append(w)
         p_all.append(p)
+        p_rgh_all.append(p_rgh)
         k_all.append(k)
         epsilon_all.append(epsilon)
 
 
     X_all = np.asarray(X_all)
     alpha_all = np.asarray(alpha_all)
-    U_all = np.asarray(U_all)
+    u_all = np.asarray(u_all)
+    v_all = np.asarray(v_all)
+    w_all = np.asarray(w_all)
     p_all = np.asarray(p_all)
+    p_rgh_all = np.asarray(p_rgh_all)
     k_all = np.asarray(k_all)
     epsilon_all = np.asarray(epsilon_all)
 
@@ -179,8 +218,11 @@ def build_dataset(case: Path = CASE, output: Path = OUTPUT):
 
     X_sync = X_all[mask]
     alpha_sync = alpha_all[mask]
-    U_sync = U_all[mask]
+    u_sync = u_all[mask]
+    v_sync = v_all[mask]
+    w_sync = w_all[mask]
     p_sync = p_all[mask]
+    p_rgh_sync = p_rgh_all[mask]
     k_sync = k_all[mask]
     epsilon_sync = epsilon_all[mask]
 
@@ -225,9 +267,9 @@ def build_dataset(case: Path = CASE, output: Path = OUTPUT):
     print("Shapes :")
     print("time     :", times_sync.shape)
     print("X        :", X_sync.shape)
-    print("U        :", U_sync.shape)
+    print("u        :", u_sync.shape)
     print("alpha    :", alpha_sync.shape)
-    print("p_rgh    :", p_sync.shape)
+    print("p        :", p_sync.shape)
     print("k        :", k_sync.shape)
     print("epsilon  :", epsilon_sync.shape)
     print("Fx       :", Fx_sync.shape)
@@ -246,9 +288,12 @@ def build_dataset(case: Path = CASE, output: Path = OUTPUT):
         time=times_sync,
 
         X=X_sync,
-        U=U_sync,
-        alpha_eau=alpha_sync,
-        p_rgh=p_sync,
+        u=u_sync,
+        v=v_sync,
+        w=w_sync,
+        alpha=alpha_sync,
+        p=p_sync,
+        p_rgh=p_rgh_sync,
         k=k_sync,
         epsilon=epsilon_sync,
 
@@ -274,9 +319,9 @@ def build_dataset(case: Path = CASE, output: Path = OUTPUT):
 
     print("time      :", times_sync.shape)
     print("X         :", X_sync.shape)
-    print("U         :", U_sync.shape)
+    print("u         :", u_sync.shape)
     print("alpha     :", alpha_sync.shape)
-    print("p_rgh     :", p_sync.shape)
+    print("p         :", p_sync.shape)
     print("k         :", k_sync.shape)
     print("epsilon   :", epsilon_sync.shape)
 
