@@ -70,7 +70,7 @@ def continuity_loss(model, points, cfg):
 
 
 
-def vof_loss(model, points, cfg=None):
+def volume_fraction_loss(model, points, cfg=None):
     """
     Transport conservatif de la fraction volumique :
         d(alpha)/dt* + div*(alpha u*) = 0

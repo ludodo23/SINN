@@ -10,8 +10,8 @@ from config import Config
 from model import SloshingPINN
 from sampling import sample_initial, sample_interior, sample_walls
 from physics import nondimensionalize_points
-from losses import (continuity_loss, vof_loss, momentum_loss, initial_loss,
-                    wall_loss, pressure_gauge_loss)
+from losses import (continuity_loss, volume_fraction_loss, momentum_loss,
+                    initial_loss, wall_loss, pressure_gauge_loss)
 
 def set_seed(seed: int) -> None:
     random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
@@ -64,7 +64,7 @@ def train(cfg: Config | None = None, output_dir: str | Path = "runs"):
         walls = nondimensionalize_points(walls_si, cfg)
 
         lc = continuity_loss(model, interior, cfg)
-        lv = vof_loss(model, interior, cfg)
+        lv = volume_fraction_loss(model, interior, cfg)
         lm = momentum_loss(model, interior, cfg)
 
         li = initial_loss(model, initial, cfg)
