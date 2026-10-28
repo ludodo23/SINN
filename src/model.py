@@ -5,35 +5,65 @@ import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
-from typing import Any, Mapping, Optional
+from typing import Any, Optional
 import torch
 from torch import nn
 
-def _cfg_value(cfg: Any, name: str, default: Any = None) -> Any:
-    if cfg is None: return default
-    if isinstance(cfg, Mapping): return cfg.get(name, default)
-    return getattr(cfg, name, default)
-
 class SloshingPINN(nn.Module):
     """forward takes [x/Lref,y/Lref,t/Tref], returns u*, v*, p*, alpha."""
-    def __init__(self, cfg: Any = None, width: Optional[int] = None,
-                 hidden_layers: Optional[int] = None):
+
+    def __init__(
+        self,
+        state_path: Optional[str | Path] = None,
+        config: Optional[str | Path | Any] = None,
+    ):
         super().__init__()
-        self.cfg = cfg
-        width = int(width if width is not None else _cfg_value(cfg, "hidden_width", 96))
-        hidden_layers = int(hidden_layers if hidden_layers is not None else
-                            _cfg_value(cfg, "hidden_layers", 5))
+
+        # Résout la configuration : chemin JSON, objet Config/dict, ou None.
+        if isinstance(config, (str, Path)):
+            config_path = Path(config)
+            with config_path.open("r", encoding="utf-8") as f:
+                config = json.load(f)
+
+        self.cfg = config
+
+        # width et hidden_layers proviennent de la configuration uniquement
+        # (plus de double définition entre __init__ et config).
+        if self.cfg is None:
+            width = 96
+            hidden_layers = 5
+        elif isinstance(self.cfg, dict):
+            width = int(self.cfg.get("hidden_width", 96))
+            hidden_layers = int(self.cfg.get("hidden_layers", 5))
+        else:
+            width = int(getattr(self.cfg, "hidden_width", 96))
+            hidden_layers = int(getattr(self.cfg, "hidden_layers", 5))
         if width < 1 or hidden_layers < 1:
             raise ValueError("width and hidden_layers must be positive.")
+
         layers, n_in = [], 3
         for _ in range(hidden_layers):
             layer = nn.Linear(n_in, width)
-            nn.init.xavier_uniform_(layer.weight); nn.init.zeros_(layer.bias)
+            nn.init.xavier_uniform_(layer.weight)
+            nn.init.zeros_(layer.bias)
             layers += [layer, nn.Tanh()]
             n_in = width
         self.backbone = nn.Sequential(*layers)
         self.head = nn.Linear(width, 4)
-        nn.init.xavier_uniform_(self.head.weight); nn.init.zeros_(self.head.bias)
+        nn.init.xavier_uniform_(self.head.weight)
+        nn.init.zeros_(self.head.bias)
+
+        # Charge les poids depuis un fichier .pt si un chemin est fourni.
+        # Suit la recommandation PyTorch : state_dict uniquement.
+        if state_path is not None:
+            state_path = Path(state_path)
+            state = torch.load(state_path, map_location="cpu", weights_only=False)
+            if isinstance(state, dict) and "model_state_dict" in state:
+                self.load_state_dict(state["model_state_dict"])
+            elif isinstance(state, nn.Module):
+                self.load_state_dict(state.state_dict())
+            else:
+                self.load_state_dict(state)
 
     def forward(self, coords_star: torch.Tensor) -> dict[str, torch.Tensor]:
         if coords_star.ndim != 2 or coords_star.shape[1] != 3:
@@ -46,9 +76,14 @@ class SloshingPINN(nn.Module):
         """SI [x,y,t] in; SI u,v,p and dimensionless alpha out."""
         if self.cfg is None:
             raise ValueError("predict_physical requires the Config used to build the model.")
-        L = float(_cfg_value(self.cfg, "length_ref"))
-        U = float(_cfg_value(self.cfg, "velocity_ref"))
-        rho = float(_cfg_value(self.cfg, "rho_ref"))
+        if isinstance(self.cfg, dict):
+            L = float(self.cfg.get("length_ref"))
+            U = float(self.cfg.get("velocity_ref"))
+            rho = float(self.cfg.get("rho_ref"))
+        else:
+            L = float(getattr(self.cfg, "length_ref"))
+            U = float(getattr(self.cfg, "velocity_ref"))
+            rho = float(getattr(self.cfg, "rho_ref"))
         T = L / U
         scales = coords_si.new_tensor([L, L, T])
         f = self.forward(coords_si / scales)

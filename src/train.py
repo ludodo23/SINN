@@ -33,7 +33,14 @@ def _validate_scales(cfg) -> None:
     if not hasattr(cfg, "time_ref"):
         cfg.time_ref = float(cfg.length_ref)/float(cfg.velocity_ref)
 
-def train(cfg: Config | None = None, output_dir: str | Path = "runs"):
+def train(
+    cfg: Config | None = None,
+    output_dir: str | Path = "runs",
+    model: SloshingPINN | None = None,
+    state_path: str | Path | None = None,
+    optimizer: torch.optim.Optimizer | None = None,
+    epochs: int | None = None,
+):
     cfg = cfg or Config()
     if hasattr(cfg, "validate"): cfg.validate()
     _validate_scales(cfg)
@@ -42,8 +49,16 @@ def train(cfg: Config | None = None, output_dir: str | Path = "runs"):
     root = Path(output_dir); root.mkdir(parents=True, exist_ok=True)
     run_dir = root / ("sloshing_" + datetime.now().strftime("%Y%m%d_%H%M%S"))
     run_dir.mkdir(parents=True, exist_ok=True)
-    model = SloshingPINN(cfg=cfg).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=float(cfg.learning_rate))
+
+    if model is None:
+        model = SloshingPINN(config=cfg, state_path=state_path).to(device)
+    else:
+        model = model.to(device)
+
+    if optimizer is None:
+        optimizer = torch.optim.Adam(model.parameters(), lr=float(cfg.learning_rate))
+
+    n_epochs = int(epochs if epochs is not None else cfg.epochs)
 
     gauge_si = torch.tensor([[0.5*(cfg.x_min+cfg.x_max),
                               0.5*(cfg.y_min+cfg.y_max), cfg.t_min]],
@@ -53,7 +68,7 @@ def train(cfg: Config | None = None, output_dir: str | Path = "runs"):
     # The tank top is open: do not impose no-slip there.
     include_top = not bool(getattr(cfg, "top_is_open", True))
 
-    for epoch in range(1, int(cfg.epochs)+1):
+    for epoch in range(1, n_epochs + 1):
         model.train()
         interior_si = sample_interior(int(cfg.n_collocation), cfg, device=device)
         initial_si = sample_initial(int(cfg.n_initial), cfg, device=device)

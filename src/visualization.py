@@ -49,42 +49,78 @@ def plot_history(path="outputs/loss_history.json", use_same_figure=True):
 
 def load_model(
     checkpoint="outputs/sloshing_pinn.pt",
+    config=None,
     device=None,
 ):
     device = device or (
         "cuda" if torch.cuda.is_available() else "cpu"
     )
 
-    saved = torch.load(
-        checkpoint,
-        map_location=device,
-        weights_only=False,
-    )
+    # Construit le modèle et charge les poids via l'API recommandée PyTorch
+    # (state_dict) directement dans __init__.
+    model = SloshingPINN(state_path=checkpoint, config=config).to(device)
 
-    cfg = saved["config"]
+    # Si aucune config n'a été fournie, tente de la récupérer depuis le checkpoint.
+    if model.cfg is None:
+        saved = torch.load(
+            checkpoint,
+            map_location=device,
+            weights_only=False,
+        )
+        if isinstance(saved, dict) and "config" in saved:
+            model.cfg = saved["config"]
 
-    model = SloshingPINN(
-        width=cfg["hidden_width"],
-        hidden_layers=cfg["hidden_layers"],
-    ).to(device)
-
-    model.load_state_dict(saved["model_state_dict"])
     model.eval()
-
-    return model, device, cfg
+    return model, device, model.cfg
 
 
 @torch.no_grad()
 def plot_fields(
+    model: SloshingPINN,
     t=0.0,
     nx=180,
     ny=80,
-    checkpoint="outputs/sloshing_pinn.pt",
+    fields=("u", "v", "p", "alpha"),
+    openfoam_data=None,
 ):
-    model, device, cfg = load_model(checkpoint)
+    """Affiche les champs prédits par le modèle PINN à l'instant t.
 
-    x = np.linspace(cfg["x_min"], cfg["x_max"], nx)
-    y = np.linspace(cfg["y_min"], cfg["y_max"], ny)
+    Paramètres
+    ----------
+    model : SloshingPINN
+        Modèle déjà chargé (obligatoire). La configuration est récupérée
+        depuis model.cfg et les prédictions passent par predict_physical
+        (coordonnées SI).
+    t : float
+        Instant d'affichage en secondes.
+    nx, ny : int
+        Résolution de la grille d'affichage.
+    fields : tuple[str]
+        Noms des champs à afficher (parmi "u", "v", "p", "alpha").
+    openfoam_data : str | dict | None
+        Si fourni, pour chaque champ affiche trois graphes en ligne :
+        OpenFOAM, modèle PINN et erreur relative (échelle 0 à 1).
+    """
+    cfg = model.cfg
+    if cfg is None:
+        raise ValueError(
+            "Le modèle ne possède pas de configuration (model.cfg est None)."
+        )
+
+    if isinstance(cfg, dict):
+        x_min = float(cfg["x_min"])
+        x_max = float(cfg["x_max"])
+        y_min = float(cfg["y_min"])
+        y_max = float(cfg["y_max"])
+    else:
+        x_min = float(cfg.x_min)
+        x_max = float(cfg.x_max)
+        y_min = float(cfg.y_min)
+        y_max = float(cfg.y_max)
+
+    device = next(model.parameters()).device
+    x = np.linspace(x_min, x_max, nx)
+    y = np.linspace(y_min, y_max, ny)
 
     X, Y = np.meshgrid(x, y)
     T = np.full_like(X, t)
@@ -100,19 +136,66 @@ def plot_fields(
         device=device,
     )
 
-    prediction = model(coords)
+    prediction = model.predict_physical(coords)
 
-    for field in ["u", "v", "p", "alpha"]: #, "k", "epsilon"]:
+    # Chargement éventuel des données OpenFOAM pour comparaison.
+    of = None
+    if openfoam_data is not None:
+        of = _load_animation_data(openfoam_data)
+        if "X" not in of or "time" not in of:
+            raise ValueError(
+                "openfoam_data doit contenir les clés 'X' et 'time'."
+            )
+        X_of = np.asarray(of["X"])
+        t_of = np.asarray(of["time"]).reshape(-1)
+        # Trouver l'instant OpenFOAM le plus proche de t.
+        i_t = int(np.argmin(np.abs(t_of - t)))
+
+    for field in fields:
         Z = prediction[field].cpu().numpy().reshape(ny, nx)
 
-        plt.figure()
-        plt.contourf(X, Y, Z, levels=40)
-        plt.colorbar(label=field)
-        plt.xlabel("x [m]")
-        plt.ylabel("y [m]")
-        plt.title(f"{field} à t = {t:g} s")
-        plt.tight_layout()
-        plt.show()
+        if of is None:
+            plt.figure()
+            plt.contourf(X, Y, Z, levels=40)
+            plt.colorbar(label=field)
+            plt.xlabel("x [m]")
+            plt.ylabel("y [m]")
+            plt.title(f"{field} à t = {t:g} s")
+            plt.tight_layout()
+            plt.show()
+        else:
+            # Trois graphes : OpenFOAM, modèle, erreur relative.
+            Z_of = np.asarray(of[field])[i_t].reshape(ny, nx)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                denom = np.maximum(np.abs(Z_of), 1e-12)
+                err = np.abs(Z - Z_of) / denom
+                err = np.clip(err, 0.0, 1.0)
+
+            fig, axes = plt.subplots(
+                1, 3, figsize=(15, 4), sharex=True, sharey=True
+            )
+
+            im0 = axes[0].contourf(X, Y, Z_of, levels=40)
+            axes[0].set_title("OpenFOAM")
+            fig.colorbar(im0, ax=axes[0], label=field, fraction=0.046)
+
+            im1 = axes[1].contourf(X, Y, Z, levels=40)
+            axes[1].set_title("SINN (modèle)")
+            fig.colorbar(im1, ax=axes[1], label=field, fraction=0.046)
+
+            im2 = axes[2].contourf(X, Y, err, levels=40, vmin=0, vmax=1)
+            axes[2].set_title("Erreur relative")
+            fig.colorbar(im2, ax=axes[2], label="|m−o|/max(|o|,eps)", fraction=0.046)
+
+            for ax in axes:
+                ax.set_xlabel("x [m]")
+                ax.set_ylabel("y [m]")
+                ax.set_aspect("equal", adjustable="box")
+                ax.grid(alpha=0.15)
+
+            fig.suptitle(f"{field} à t = {t:g} s")
+            fig.tight_layout()
+            plt.show()
 
 
 def _load_animation_data(data):
@@ -128,9 +211,76 @@ def _load_animation_data(data):
     return {key: data[key] for key in data.files}
 
 
+def build_sinn_data_from_model(
+    model: SloshingPINN,
+    openfoam_data,
+    batch_size: int = 65536,
+) -> dict:
+    """Évalue le modèle PINN aux mêmes (x, y, t) que le dataset OpenFOAM.
+
+    Les coordonnées sont en unités SI ; l'appel passe par
+    model.predict_physical. Retourne un dictionnaire sinn_data utilisable
+    directement par animate_comparison.
+
+    Paramètres
+    ----------
+    model : SloshingPINN
+        Modèle déjà chargé (doit posséder une configuration model.cfg).
+    openfoam_data : str | dict
+        Chemin vers un .npz ou dictionnaire contenant X et time.
+    batch_size : int
+        Taille des lots pour l'inférence.
+
+    Retour
+    ------
+    dict
+        Dictionnaire avec les clés "time", "X", "alpha_eau".
+    """
+    of = _load_animation_data(openfoam_data)
+    X_of = np.asarray(of["X"], dtype=np.float32)      # (T, N, >=2)
+    times = np.asarray(of["time"], dtype=np.float32).reshape(-1)
+
+    n_times, n_points = X_of.shape[0], X_of.shape[1]
+    device = next(model.parameters()).device
+    model.eval()
+
+    field_names = ("u", "v", "p", "alpha")
+    predictions = {
+        name: np.empty((n_times, n_points), dtype=np.float32)
+        for name in field_names
+    }
+
+    with torch.inference_mode():
+        for i, t in enumerate(times):
+            xy = X_of[i, :, :2]
+            for start in range(0, n_points, batch_size):
+                end = min(start + batch_size, n_points)
+                coords_xy = xy[start:end]
+                t_column = np.full(
+                    (end - start, 1), float(t), dtype=np.float32
+                )
+                coords_np = np.concatenate([coords_xy, t_column], axis=1)
+                coords = torch.as_tensor(
+                    coords_np, dtype=torch.float32, device=device
+                )
+                pred = model.predict_physical(coords)
+                for name in field_names:
+                    values = (
+                        pred[name].detach().cpu().numpy().reshape(-1)
+                    )
+                    predictions[name][i, start:end] = values
+
+    return {
+        "time": times,
+        "X": X_of,
+        "alpha_eau": predictions["alpha"],
+    }
+
+
 def animate_comparison(
     openfoam_data,
-    sinn_data,
+    sinn_data=None,
+    model=None,
     save_path=None,
     field="alpha_eau",
     xlim=(-2, 8),
@@ -148,8 +298,13 @@ def animate_comparison(
     openfoam_data : str ou dict
         Chemin vers un .npz ou dictionnaire contenant X, alpha_eau,
         time et éventuellement Fx.
-    sinn_data : str ou dict
-        Même structure pour les prédictions SINN.
+    sinn_data : str ou dict, optionnel
+        Même structure pour les prédictions SINN. Si None, un modèle
+        doit être fourni via model.
+    model : SloshingPINN, optionnel
+        Modèle déjà chargé. Si sinn_data est None, les prédictions SINN
+        sont générées à la volée à partir de ce modèle (via
+        build_sinn_data_from_model).
     save_path : str ou None
         Chemin de sortie .gif ou .mp4.
     field : str
@@ -171,8 +326,21 @@ def animate_comparison(
     fig : Figure
     """
 
+    if sinn_data is None and model is None:
+        raise ValueError(
+            "Fournir soit sinn_data, soit model (au moins l'un des deux)."
+        )
+    if sinn_data is not None and model is not None:
+        raise ValueError(
+            "Fournir soit sinn_data, soit model, mais pas les deux."
+        )
+
     of = _load_animation_data(openfoam_data)
-    sinn = _load_animation_data(sinn_data)
+
+    if sinn_data is None:
+        sinn = build_sinn_data_from_model(model, openfoam_data)
+    else:
+        sinn = _load_animation_data(sinn_data)
 
     # --------------------------------------------------------
     # Chargement des données
