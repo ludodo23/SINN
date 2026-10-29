@@ -16,6 +16,7 @@ from losses import (continuity_loss, volume_fraction_loss, momentum_loss,
 
 import csv
 import time
+from tqdm import trange, tqdm
 from dataclasses import replace
 
 from adaptive_weights import GradientBalancedWeights
@@ -161,6 +162,7 @@ def train(
     state_path: str | Path | None = None,
     optimizer: torch.optim.Optimizer | None = None,
     epochs: int | None = None,
+    lbfgs_epochs: int | None = None,
 ):
     """Train the dimensionless laminar sloshing PINN.
 
@@ -227,6 +229,19 @@ def train(
     epochs_total = int(epochs if epochs is not None else cfg.epochs)
     epochs_per_window = max(1, epochs_total // len(windows))
 
+    # Print configuration parameters once at the start
+    print(f"Training config:\n\tepochs={epochs_total}\n"
+          f"\tfourier features={cfg.use_fourier_features}\n"
+          f"\tadaptive sampling={cfg.use_adaptive_sampling}\n"
+          f"\tadaptive loss weights={cfg.use_adaptive_loss_weights}\n"
+          f"\tuse lbfgs={cfg.use_lbfgs}\n"
+          f"\ttemporal segmentation={cfg.use_temporal_segmentation}\n"
+          f"\twindows={len(windows)}\n"
+          f"\tepochs_per_window={epochs_per_window}\n"
+          f"\tlearning_rate={float(cfg.learning_rate):.2e}\n"
+          f"\tdevice={device}\n"
+          f"\tseed={int(cfg.seed)}")
+
     weight_names = (
         "continuity", "vof", "momentum",
         "initial", "wall", "pressure_gauge",
@@ -249,6 +264,13 @@ def train(
 
     for window_id, (t_left, t_right) in enumerate(windows):
         window_cfg = replace(cfg, t_min=t_left, t_max=t_right)
+
+        # Progress bar for total epochs
+        if cfg.use_temporal_segmentation:
+            pbar = tqdm(total=epochs_per_window, desc=f"Training on window {window_id+1}/{len(windows)}, t=[{t_left}, {t_right}]", leave=True, dynamic_ncols=True)
+        else:
+            pbar = tqdm(total=epochs_per_window, desc=f"Training for t=[{t_left}, {t_right}]", leave=True, dynamic_ncols=True)
+
 
         # Les poids du réseau et l'état d'Adam sont conservés.
         cached_interior_si = None
@@ -348,6 +370,17 @@ def train(
             }
             history.append(row)
 
+            # Update progress bar with losses
+            pbar.update(1)
+            pbar.set_postfix(
+                total=f"{float(total.detach().cpu()):.4e}",
+                continuity=f"{float(losses['continuity'].detach().cpu()):.4e}",
+                volume_fraction=f"{float(losses['vof'].detach().cpu()):.4e}",
+                momentum=f"{float(losses['momentum'].detach().cpu()):.4e}",
+                lr=f"{adam.param_groups[0]['lr']:.2e}",
+                window=f"w{window_id}",
+            )
+
         # Les derniers points peuvent servir de points de replay
         # à la fenêtre suivante. Échantillonner plusieurs temps
         # est préférable à un seul instant de raccord.
@@ -357,6 +390,9 @@ def train(
 
     
     if cfg.use_lbfgs:
+        print("Starting L-BFGS optimization...", flush=True)
+        # Use lbfgs_epochs parameter if provided, otherwise fall back to cfg
+        lbfgs_epochs_here = lbfgs_epochs if lbfgs_epochs is not None else cfg.lbfgs_epochs
         # Ces points et les poids des pertes doivent rester fixes
         # pendant toutes les évaluations de la closure.
         fixed_points = nondimensionalize_points(
@@ -389,7 +425,7 @@ def train(
             total.backward()
             return total
 
-        for _ in range(cfg.lbfgs_epochs):
+        for _ in range(lbfgs_epochs_here):
             model.train()
             lbfgs.step(closure)
 
