@@ -8,10 +8,19 @@ import numpy as np
 import torch
 from config import Config
 from model import SloshingPINN
-from sampling import sample_initial, sample_interior, sample_walls
+from sampling import sample_initial, sample_interior, sample_walls, adaptive_score, sample_mixed_adaptive
 from physics import nondimensionalize_points
 from losses import (continuity_loss, volume_fraction_loss, momentum_loss,
                     initial_loss, wall_loss, pressure_gauge_loss)
+
+
+import csv
+import time
+from dataclasses import replace
+
+from adaptive_weights import GradientBalancedWeights
+
+
 
 def set_seed(seed: int) -> None:
     """Set random seeds for reproducibility.
@@ -79,6 +88,72 @@ def _validate_scales(cfg) -> None:
     if not hasattr(cfg, "time_ref"):
         cfg.time_ref = float(cfg.length_ref) / float(cfg.velocity_ref)
 
+
+def score_candidates(model, candidates, cfg):
+    """Évalue la difficulté physique locale sur un pool de candidats."""
+    rc = continuity_loss(
+        model, candidates, cfg, return_per_point=True
+    )
+    rv = volume_fraction_loss(
+        model, candidates, cfg, return_per_point=True
+    )
+    rm = momentum_loss(
+        model, candidates, cfg, return_per_point=True
+    )
+
+    c = candidates.detach().clone().requires_grad_(True)
+    alpha = model(c)["alpha"]
+    grad_alpha = torch.autograd.grad(
+        alpha.sum(), c, create_graph=False
+    )[0]
+    grad_alpha_norm = torch.linalg.vector_norm(
+        grad_alpha[:, :2], dim=1
+    )
+
+    with torch.no_grad():
+        alpha_values = model(candidates)["alpha"].reshape(-1)
+        scores = adaptive_score(
+            rc, rv, rm, alpha_values, grad_alpha_norm
+        )
+
+    return scores.detach()
+
+
+
+def make_time_windows(t_min, t_max, width, overlap=0.0):
+    if width <= 0:
+        raise ValueError("width doit être positif.")
+    if overlap < 0 or overlap >= width:
+        raise ValueError("overlap doit être dans [0, width).")
+
+    step = width - overlap
+    windows = []
+    left = t_min
+
+    while left < t_max:
+        right = min(left + width, t_max)
+        windows.append((left, right))
+        if right >= t_max:
+            break
+        left += step
+
+    return windows
+
+
+
+def write_history_csv(history, run_dir):
+    if not history:
+        return
+
+    path = Path(run_dir) / "benchmark.csv"
+    fieldnames = list(history[0].keys())
+
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(history)
+
+
 def train(
     cfg: Config | None = None,
     output_dir: str | Path = "runs",
@@ -129,68 +204,200 @@ def train(
 
     if model is None:
         model = SloshingPINN(config=cfg, state_path=state_path).to(device)
+        (run_dir/"config.json").write_text(json.dumps(config_dict(cfg), indent=2), encoding="utf-8")
     else:
         model = model.to(device)
 
-    if optimizer is None:
-        optimizer = torch.optim.Adam(model.parameters(), lr=float(cfg.learning_rate))
+    
+    # Conserver une instance unique du modèle et un seul optimiseur Adam.
+    adam = optimizer or torch.optim.Adam(
+        model.parameters(), lr=float(cfg.learning_rate)
+    )
 
-    n_epochs = int(epochs if epochs is not None else cfg.epochs)
+    if cfg.use_temporal_segmentation:
+        windows = make_time_windows(
+            cfg.t_min,
+            cfg.t_max,
+            cfg.temporal_window_size,
+            cfg.temporal_overlap,
+        )
+    else:
+        windows = [(cfg.t_min, cfg.t_max)]
+
+    epochs_total = int(epochs if epochs is not None else cfg.epochs)
+    epochs_per_window = max(1, epochs_total // len(windows))
+
+    weight_names = (
+        "continuity", "vof", "momentum",
+        "initial", "wall", "pressure_gauge",
+    )
+    weight_balancer = GradientBalancedWeights(
+        weight_names,
+        beta=cfg.weight_ema_beta,
+        min_weight=cfg.min_adaptive_weight,
+        max_weight=cfg.max_adaptive_weight,
+    )
+
+    history = []
+    global_epoch = 0
+    replay_si = None
 
     gauge_si = torch.tensor([[0.5*(cfg.x_min+cfg.x_max),
                               0.5*(cfg.y_min+cfg.y_max), cfg.t_min]],
                             dtype=torch.float32, device=device)
     gauge = nondimensionalize_points(gauge_si, cfg)
-    history = []
-    # The tank top is open: do not impose no-slip there.
-    include_top = not bool(getattr(cfg, "top_is_open", True))
 
-    for epoch in range(1, n_epochs + 1):
-        model.train()
-        interior_si = sample_interior(int(cfg.n_collocation), cfg, device=device)
-        initial_si = sample_initial(int(cfg.n_initial), cfg, device=device)
-        walls_si = sample_walls(int(cfg.n_wall), cfg, device=device,
-                                include_top=include_top)
-        interior = nondimensionalize_points(interior_si, cfg)
-        initial = nondimensionalize_points(initial_si, cfg)
-        walls = nondimensionalize_points(walls_si, cfg)
+    for window_id, (t_left, t_right) in enumerate(windows):
+        window_cfg = replace(cfg, t_min=t_left, t_max=t_right)
 
-        lc = continuity_loss(model, interior, cfg)
-        lv = volume_fraction_loss(model, interior, cfg)
-        lm = momentum_loss(model, interior, cfg)
+        # Les poids du réseau et l'état d'Adam sont conservés.
+        cached_interior_si = None
+        fixed_lbfgs_points = None
 
-        li = initial_loss(model, initial, cfg)
-        lw = wall_loss(model, walls, cfg)
-        lg = pressure_gauge_loss(model, gauge, cfg)
-        total = (cfg.w_continuity*lc + cfg.w_vof*lv + cfg.w_momentum*lm
-                 + cfg.w_initial*li + cfg.w_wall*lw
-                 + cfg.w_pressure_gauge*lg)
-        optimizer.zero_grad(set_to_none=True)
-        total.backward()
-        optimizer.step()
+        for local_epoch in range(epochs_per_window):
+            global_epoch += 1
+            model.train()
 
-        row = {"epoch": epoch, "total": float(total.detach().cpu()),
-               "continuity": float(lc.detach().cpu()), "vof": float(lv.detach().cpu()),
-               "momentum": float(lm.detach().cpu()), "initial": float(li.detach().cpu()),
-               "wall": float(lw.detach().cpu()), "pressure_gauge": float(lg.detach().cpu())}
-        history.append(row)
-        if epoch == 1 or epoch % int(cfg.print_every) == 0:
-            print(f"[{epoch:6d}/{cfg.epochs}] total={row['total']:.4e} "
-                  f"cont={row['continuity']:.3e} vof={row['vof']:.3e} "
-                  f"mom={row['momentum']:.3e} init={row['initial']:.3e} "
-                  f"wall={row['wall']:.3e}")
-        if epoch % max(1, int(cfg.print_every)) == 0 or epoch == int(cfg.epochs):
-            payload = {"model_state_dict": model.state_dict(), "config": config_dict(cfg),
-                       "epoch": epoch, "loss": row["total"]}
-            torch.save(payload, run_dir/"checkpoint_latest.pt")
-            (run_dir/"history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
-            (run_dir/"config.json").write_text(json.dumps(config_dict(cfg), indent=2), encoding="utf-8")
+            # Collocation dans la fenêtre courante.
+            interior_si = sample_interior(
+                cfg.n_collocation, window_cfg, device=device
+            )
 
-    # torch.save({"model_state_dict": model.state_dict(), "config": config_dict(cfg),
-    #             "epoch": int(cfg.epochs), "loss": history[-1]["total"] if history else None},
-    #            run_dir/"checkpoint_final.pt")
-    torch.save(model, run_dir/"checkpoint_final.pt")
+            # Replay temporel : maintenir des contraintes sur le passé.
+            if replay_si is not None and replay_si.numel() > 0:
+                n_replay = min(
+                    replay_si.shape[0],
+                    int(cfg.temporal_replay_fraction * cfg.n_collocation),
+                )
+                replay_idx = torch.randperm(
+                    replay_si.shape[0], device=device
+                )[:n_replay]
+                replay_batch = replay_si[replay_idx]
+                interior_si = torch.cat(
+                    [interior_si, replay_batch], dim=0
+                )
+
+            initial_si = (
+                sample_initial(cfg.n_initial, cfg, device=device)
+                if window_id == 0 else None
+            )
+            walls_si = sample_walls(
+                cfg.n_wall,
+                window_cfg,
+                device=device,
+                include_top=not bool(getattr(cfg, "top_is_open", True)),
+            )
+
+            interior = nondimensionalize_points(interior_si, cfg)
+            walls = nondimensionalize_points(walls_si, cfg)
+
+            lc = continuity_loss(model, interior, cfg)
+            lv = volume_fraction_loss(model, interior, cfg)
+            lm = momentum_loss(model, interior, cfg)
+            lw = wall_loss(model, walls, cfg)
+
+            if initial_si is not None:
+                initial = nondimensionalize_points(initial_si, cfg)
+                li = initial_loss(model, initial, cfg)
+            else:
+                li = lc.new_zeros(())
+
+            lg = pressure_gauge_loss(model, gauge, cfg)
+
+            losses = {
+                "continuity": lc,
+                "vof": lv,
+                "momentum": lm,
+                "initial": li,
+                "wall": lw,
+                "pressure_gauge": lg,
+            }
+
+            # Poids fixes par défaut.
+            weights = {
+                "continuity": cfg.w_continuity,
+                "vof": cfg.w_vof,
+                "momentum": cfg.w_momentum,
+                "initial": cfg.w_initial,
+                "wall": cfg.w_wall,
+                "pressure_gauge": cfg.w_pressure_gauge,
+            }
+
+            # Option adaptative : remplacer les poids périodiquement.
+            if cfg.use_adaptive_loss_weights and (
+                local_epoch % cfg.weight_update_interval == 0
+            ):
+                weights.update(weight_balancer.update(losses, model))
+
+            total = sum(weights[k] * losses[k] for k in losses)
+
+            adam.zero_grad(set_to_none=True)
+            total.backward()
+            adam.step()
+
+            row = {
+                "epoch": global_epoch,
+                "window": window_id,
+                "t_left": t_left,
+                "t_right": t_right,
+                "total": float(total.detach().cpu()),
+                **{
+                    key: float(value.detach().cpu())
+                    for key, value in losses.items()
+                },
+            }
+            history.append(row)
+
+        # Les derniers points peuvent servir de points de replay
+        # à la fenêtre suivante. Échantillonner plusieurs temps
+        # est préférable à un seul instant de raccord.
+        replay_si = sample_interior(
+            cfg.n_collocation, window_cfg, device=device
+        ).detach()
+
+    
+    if cfg.use_lbfgs:
+        # Ces points et les poids des pertes doivent rester fixes
+        # pendant toutes les évaluations de la closure.
+        fixed_points = nondimensionalize_points(
+            sample_interior(cfg.n_collocation, cfg, device=device),
+            cfg,
+        )
+
+        frozen_weights = dict(weights)
+
+        lbfgs = torch.optim.LBFGS(
+            model.parameters(),
+            lr=cfg.lbfgs_lr,
+            max_iter=cfg.lbfgs_max_iter,
+            history_size=cfg.lbfgs_history_size,
+            line_search_fn="strong_wolfe",
+        )
+
+        def closure():
+            lbfgs.zero_grad(set_to_none=True)
+
+            lc = continuity_loss(model, fixed_points, cfg)
+            lv = volume_fraction_loss(model, fixed_points, cfg)
+            lm = momentum_loss(model, fixed_points, cfg)
+
+            total = (
+                frozen_weights["continuity"] * lc
+                + frozen_weights["vof"] * lv
+                + frozen_weights["momentum"] * lm
+            )
+            total.backward()
+            return total
+
+        for _ in range(cfg.lbfgs_epochs):
+            model.train()
+            lbfgs.step(closure)
+
+    write_history_csv(history, run_dir)
+    (run_dir/"history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
+
     print(f"Training finished. Results saved to: {run_dir}")
+
     return model, history, run_dir
 
 if __name__ == "__main__":

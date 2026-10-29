@@ -131,3 +131,71 @@ def sample_walls(n, cfg, device=None, include_top=True):
         return torch.empty((0, 3), device=device)
 
     return torch.cat(points, dim=0)
+
+
+def robust_normalize(values, eps=1e-8):
+    """Normalise un score par ses quantiles 10 % et 90 %."""
+    values = values.detach().reshape(-1)
+    q10 = torch.quantile(values, 0.10)
+    q90 = torch.quantile(values, 0.90)
+    return ((values - q10) / (q90 - q10 + eps)).clamp(0.0, 1.0)
+
+
+def adaptive_score(
+    continuity_residual,
+    vof_residual,
+    momentum_residual,
+    alpha,
+    grad_alpha_norm,
+    w_continuity=0.2,
+    w_vof=0.4,
+    w_momentum=0.2,
+    w_interface=0.2,
+):
+    """Score de difficulté par candidat, sans gradient d'entraînement."""
+    rc = robust_normalize(continuity_residual.square())
+    rv = robust_normalize(vof_residual.square())
+    rm = robust_normalize(momentum_residual)
+    ga = robust_normalize(grad_alpha_norm)
+
+    proximity = torch.exp(
+        -((alpha.detach().reshape(-1) - 0.5) / 0.15).square()
+    )
+
+    interface_score = 0.5 * proximity + 0.5 * ga
+
+    return (
+        w_continuity * rc
+        + w_vof * rv
+        + w_momentum * rm
+        + w_interface * interface_score
+    )
+
+
+def sample_mixed_adaptive(candidates, scores, n, adaptive_fraction=0.5):
+    """Sélectionne des points uniformes et difficiles sans remplacement."""
+    if n > candidates.shape[0]:
+        raise ValueError("Le pool candidat doit contenir au moins n points.")
+
+    n_adaptive = min(n, round(n * adaptive_fraction))
+    n_uniform = n - n_adaptive
+
+    uniform_idx = torch.randperm(
+        candidates.shape[0], device=candidates.device
+    )[:n_uniform]
+
+    mask = torch.ones(
+        candidates.shape[0], dtype=torch.bool, device=candidates.device
+    )
+    mask[uniform_idx] = False
+    remaining = torch.where(mask)[0]
+
+    k = min(n_adaptive, remaining.numel())
+    if k > 0:
+        local_scores = scores[remaining]
+        adaptive_idx = remaining[torch.topk(local_scores, k=k).indices]
+    else:
+        adaptive_idx = remaining[:0]
+
+    indices = torch.cat([uniform_idx, adaptive_idx])
+    return candidates[indices]

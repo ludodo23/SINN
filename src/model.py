@@ -9,6 +9,36 @@ from typing import Any, Optional
 import torch
 from torch import nn
 
+import math
+
+
+class FourierFeatures(nn.Module):
+    """Encodage sinusoïdal de coordonnées adimensionnelles."""
+
+    def __init__(self, bands=(1, 2, 4, 8, 16)):
+        super().__init__()
+        bands = torch.as_tensor(bands, dtype=torch.float32)
+        if bands.ndim != 1 or bands.numel() == 0:
+            raise ValueError("bands doit être une séquence non vide.")
+        if torch.any(bands <= 0):
+            raise ValueError("Toutes les fréquences doivent être positives.")
+
+        self.register_buffer("bands", 2.0 * math.pi * bands)
+
+    @property
+    def out_features(self):
+        return 3 + 6 * self.bands.numel()
+
+    def forward(self, coords):
+        # coords : (N, 3), [x*, y*, t*]
+        phase = coords.unsqueeze(-1) * self.bands
+        phase = phase.flatten(start_dim=1)
+        return torch.cat(
+            [coords, torch.sin(phase), torch.cos(phase)],
+            dim=1,
+        )
+
+
 class SloshingPINN(nn.Module):
     """Physics-informed neural network for 2D water–air sloshing.
 
@@ -44,27 +74,42 @@ class SloshingPINN(nn.Module):
 
         self.cfg = config
 
+        if self.cfg is None:
+            get_cfg = lambda key, default: default
+        elif isinstance(self.cfg, dict):
+            get_cfg = lambda key, default: self.cfg.get(key, default)
+        else:
+            get_cfg = lambda key, default: getattr(
+                self.cfg, key, default
+            )
+
         # Width and hidden_layers come from the configuration only
         # (no double definition between __init__ and config).
-        if self.cfg is None:
-            width = 96
-            hidden_layers = 5
-        elif isinstance(self.cfg, dict):
-            width = int(self.cfg.get("hidden_width", 96))
-            hidden_layers = int(self.cfg.get("hidden_layers", 5))
-        else:
-            width = int(getattr(self.cfg, "hidden_width", 96))
-            hidden_layers = int(getattr(self.cfg, "hidden_layers", 5))
+        width = int(get_cfg("hidden_width", 96))
+        hidden_layers = int(get_cfg("hidden_layers", 5))
         if width < 1 or hidden_layers < 1:
             raise ValueError("width and hidden_layers must be positive.")
 
-        layers, n_in = [], 3
+        self.use_fourier_features = bool(
+            get_cfg("use_fourier_features", False)
+        )
+
+        if self.use_fourier_features:
+            bands = get_cfg("fourier_bands", (1, 2, 4, 8, 16))
+            self.encoding = FourierFeatures(bands)
+            n_in = self.encoding.out_features
+        else:
+            self.encoding = nn.Identity()
+            n_in = 3
+
+        layers = []
         for _ in range(hidden_layers):
             layer = nn.Linear(n_in, width)
             nn.init.xavier_uniform_(layer.weight)
             nn.init.zeros_(layer.bias)
-            layers += [layer, nn.Tanh()]
+            layers.extend([layer, nn.Tanh()])
             n_in = width
+
         self.backbone = nn.Sequential(*layers)
         self.head = nn.Linear(width, 4)
         nn.init.xavier_uniform_(self.head.weight)
@@ -100,7 +145,7 @@ class SloshingPINN(nn.Module):
         """
         if coords_star.ndim != 2 or coords_star.shape[1] != 3:
             raise ValueError("coords_star must have shape (N,3): [x*,y*,t*].")
-        raw = self.head(self.backbone(coords_star))
+        raw = self.head(self.backbone(self.encoding(coords_star)))
         return {"u": raw[:, 0:1], "v": raw[:, 1:2], "p": raw[:, 2:3],
                 "alpha": torch.sigmoid(raw[:, 3:4])}
 

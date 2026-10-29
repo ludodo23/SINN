@@ -126,6 +126,39 @@ class Config:
     w_wall: float = 2.0
     w_pressure_gauge: float = 0.01
 
+
+    # --- Options expérimentales indépendantes ---
+    use_fourier_features: bool = False
+    use_adaptive_sampling: bool = False
+    use_temporal_segmentation: bool = False
+    use_adaptive_loss_weights: bool = False
+    use_lbfgs: bool = False
+
+    # Fourier features : fréquences des coordonnées adimensionnelles
+    fourier_bands: tuple = (1, 2, 4, 8, 16)
+
+    # Adaptive sampling
+    adaptive_fraction: float = 0.5
+    n_candidate_points: int = 8192
+    sampling_update_interval: int = 100
+
+    # Segmentation temporelle, en secondes physiques
+    temporal_window_size: float = 1.0
+    temporal_overlap: float = 0.0
+    temporal_replay_fraction: float = 0.25
+
+    # Pondération adaptative des pertes
+    weight_update_interval: int = 100
+    weight_ema_beta: float = 0.95
+    min_adaptive_weight: float = 0.1
+    max_adaptive_weight: float = 10.0
+
+    # Optimisation
+    lbfgs_epochs: int = 1000
+    lbfgs_max_iter: int = 200
+    lbfgs_history_size: int = 50
+    lbfgs_lr: float = 0.5
+
     @property
     def mu_water(self):
         """Dynamic viscosity of water [Pa.s]."""
@@ -188,6 +221,17 @@ class Config:
 
         assert self.interface_smoothing > 0
         assert self.print_every > 0
+
+        assert 0.0 <= self.adaptive_fraction <= 1.0
+        assert self.n_candidate_points >= self.n_collocation
+        assert self.sampling_update_interval > 0
+        assert self.temporal_window_size > 0
+        assert 0.0 <= self.temporal_overlap < self.temporal_window_size
+        assert 0.0 <= self.temporal_replay_fraction <= 1.0
+        assert 0.0 < self.weight_ema_beta < 1.0
+        assert 0.0 < self.min_adaptive_weight <= self.max_adaptive_weight
+        assert self.lbfgs_epochs > 0
+        assert self.lbfgs_max_iter > 0
 
         return self
 

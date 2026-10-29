@@ -27,7 +27,7 @@ def mse(value):
     return torch.mean(value**2)
 
 
-def continuity_loss(model, points, cfg):
+def continuity_loss(model, points, cfg, return_per_point=False):
     """Penalise mass conservation violation for 2D incompressible flow.
 
     Non-dimensional equation::
@@ -67,11 +67,10 @@ def continuity_loss(model, points, cfg):
     # Divergence of the non-dimensional velocity field.
     residual = du[:, 0:1] + dv[:, 1:2]
 
-    return mse(residual)
+    return residual.square().reshape(-1) if return_per_point else mse(residual)
 
 
-
-def volume_fraction_loss(model, points, cfg=None):
+def volume_fraction_loss(model, points, cfg=None, return_per_point=False):
     """Conservative volume fraction transport:
 
         d(alpha)/dt* + div*(alpha u*) = 0
@@ -107,10 +106,10 @@ def volume_fraction_loss(model, points, cfg=None):
         + grad_alpha_v[:, 1:2]
     )
 
-    return mse(residual)
+    return residual.square().reshape(-1) if return_per_point else mse(residual)
 
 
-def momentum_loss(model, points, cfg):
+def momentum_loss(model, points, cfg, return_per_point=False):
     """Penalise violation of non-dimensional momentum equations
     for laminar water–air flow.
 
@@ -276,6 +275,8 @@ def momentum_loss(model, points, cfg):
         - curvature * alpha_y / cfg.We
     )
 
+    if return_per_point:
+        return (rx.square() + ry.square()).reshape(-1)
     return mse(rx) + mse(ry)
 
 
