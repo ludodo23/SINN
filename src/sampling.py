@@ -172,8 +172,16 @@ def adaptive_score(
     )
 
 
-def sample_mixed_adaptive(candidates, scores, n, adaptive_fraction=0.5):
-    """Sélectionne des points uniformes et difficiles sans remplacement."""
+def sample_mixed_adaptive(candidates, scores, n, adaptive_fraction=0.5,
+                          return_indices=False):
+    """Sélectionne des points uniformes et difficiles sans remplacement.
+
+    Parameters
+    ----------
+    return_indices : bool, optional
+        Si True, renvoie aussi les indices sélectionnés dans ``candidates``.
+        Utile pour retrouver les scores et résidus par point associés.
+    """
     if n > candidates.shape[0]:
         raise ValueError("Le pool candidat doit contenir au moins n points.")
 
@@ -198,4 +206,7 @@ def sample_mixed_adaptive(candidates, scores, n, adaptive_fraction=0.5):
         adaptive_idx = remaining[:0]
 
     indices = torch.cat([uniform_idx, adaptive_idx])
-    return candidates[indices]
+    selected = candidates[indices]
+    if return_indices:
+        return selected, indices
+    return selected

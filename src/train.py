@@ -9,7 +9,7 @@ import torch
 from config import Config
 from model import SloshingPINN
 from sampling import sample_initial, sample_interior, sample_walls, adaptive_score, sample_mixed_adaptive
-from physics import nondimensionalize_points
+from physics import nondimensionalize_points, dimensionalize_points
 from losses import (continuity_loss, volume_fraction_loss, momentum_loss,
                     initial_loss, wall_loss, pressure_gauge_loss)
 
@@ -117,7 +117,14 @@ def score_candidates(model, candidates, cfg):
             rc, rv, rm, alpha_values, grad_alpha_norm
         )
 
-    return scores.detach()
+    return {
+        "scores": scores.detach(),
+        "continuity": rc.detach(),
+        "vof": rv.detach(),
+        "momentum": rm.detach(),
+        "grad_alpha_norm": grad_alpha_norm.detach(),
+        "alpha": alpha_values.detach(),
+    }
 
 
 
@@ -261,6 +268,19 @@ def train(
     global_epoch = 0
     replay_si = None
 
+    # Historisation des points adaptatifs et de la perte locale.
+    use_adaptive_history = bool(getattr(cfg, "use_adaptive_sampling", False))
+    adaptive_history_epochs = []
+    adaptive_history_windows = []
+    adaptive_history_tleft = []
+    adaptive_history_tright = []
+    adaptive_points = []
+    adaptive_scores = []
+    adaptive_continuity = []
+    adaptive_vof = []
+    adaptive_momentum = []
+    adaptive_alpha = []
+
     gauge_si = torch.tensor([[0.5*(cfg.x_min+cfg.x_max),
                               0.5*(cfg.y_min+cfg.y_max), cfg.t_min]],
                             dtype=torch.float32, device=device)
@@ -284,10 +304,67 @@ def train(
             global_epoch += 1
             model.train()
 
-            # Collocation dans la fenêtre courante.
-            interior_si = sample_interior(
-                cfg.n_collocation, window_cfg, device=device
-            )
+            # Collocation adaptative : mise à jour périodique du pool.
+            if cfg.use_adaptive_sampling and (
+                cached_interior_si is None
+                or local_epoch % cfg.sampling_update_interval == 0
+            ):
+                model.eval()
+                with torch.enable_grad():
+                    candidates_si = sample_interior(
+                        cfg.n_candidate_points, window_cfg, device=device
+                    )
+                    candidates_nd = nondimensionalize_points(candidates_si, cfg)
+                    score_result = score_candidates(model, candidates_nd, cfg)
+
+                scores = score_result["scores"]
+                selected_nd, selected_idx = sample_mixed_adaptive(
+                    candidates_nd,
+                    scores,
+                    cfg.n_collocation,
+                    adaptive_fraction=cfg.adaptive_fraction,
+                    return_indices=True,
+                )
+                cached_interior_si = dimensionalize_points(
+                    selected_nd, cfg
+                ).detach()
+                model.train()
+
+                # Historisation des points adaptatifs et de la perte locale.
+                if use_adaptive_history:
+                    adaptive_history_epochs.append(global_epoch)
+                    adaptive_history_windows.append(window_id)
+                    adaptive_history_tleft.append(float(t_left))
+                    adaptive_history_tright.append(float(t_right))
+                    adaptive_points.append(
+                        selected_nd.detach().cpu().numpy().copy()
+                    )
+                    adaptive_scores.append(
+                        scores[selected_idx].detach().cpu().numpy().copy()
+                    )
+                    adaptive_continuity.append(
+                        score_result["continuity"][selected_idx]
+                        .detach().cpu().numpy().copy()
+                    )
+                    adaptive_vof.append(
+                        score_result["vof"][selected_idx]
+                        .detach().cpu().numpy().copy()
+                    )
+                    adaptive_momentum.append(
+                        score_result["momentum"][selected_idx]
+                        .detach().cpu().numpy().copy()
+                    )
+                    adaptive_alpha.append(
+                        score_result["alpha"][selected_idx]
+                        .detach().cpu().numpy().copy()
+                    )
+
+            if cfg.use_adaptive_sampling and cached_interior_si is not None:
+                interior_si = cached_interior_si.clone()
+            else:
+                interior_si = sample_interior(
+                    cfg.n_collocation, window_cfg, device=device
+                )
 
             # Replay temporel : maintenir des contraintes sur le passé.
             if replay_si is not None and replay_si.numel() > 0:
@@ -432,6 +509,56 @@ def train(
         for _ in range(lbfgs_epochs_here):
             model.train()
             lbfgs.step(closure)
+
+    # Sauvegarde de l'historique des points adaptatifs et de la perte locale.
+    if use_adaptive_history and adaptive_points:
+        points_arr = np.stack(adaptive_points, axis=0)          # (M, N, 3)
+        scores_arr = np.stack(adaptive_scores, axis=0)          # (M, N)
+        cont_arr = np.stack(adaptive_continuity, axis=0)        # (M, N)
+        vof_arr = np.stack(adaptive_vof, axis=0)                # (M, N)
+        mom_arr = np.stack(adaptive_momentum, axis=0)           # (M, N)
+        alpha_arr = np.stack(adaptive_alpha, axis=0)            # (M, N)
+        np.savez_compressed(
+            run_dir / "adaptive_history.npz",
+            epochs=np.asarray(adaptive_history_epochs, dtype=int),
+            windows=np.asarray(adaptive_history_windows, dtype=int),
+            t_left=np.asarray(adaptive_history_tleft, dtype=float),
+            t_right=np.asarray(adaptive_history_tright, dtype=float),
+            points=points_arr,
+            scores=scores_arr,
+            continuity=cont_arr,
+            vof=vof_arr,
+            momentum=mom_arr,
+            alpha=alpha_arr,
+        )
+        summary = [
+            {
+                "epoch": int(e),
+                "window": int(w),
+                "t_left": float(tl),
+                "t_right": float(tr),
+                "n_points": int(points_arr[i].shape[0]),
+                "mean_score": float(scores_arr[i].mean()),
+                "mean_continuity": float(cont_arr[i].mean()),
+                "mean_vof": float(vof_arr[i].mean()),
+                "mean_momentum": float(mom_arr[i].mean()),
+            }
+            for i, (e, w, tl, tr) in enumerate(
+                zip(
+                    adaptive_history_epochs,
+                    adaptive_history_windows,
+                    adaptive_history_tleft,
+                    adaptive_history_tright,
+                )
+            )
+        ]
+        (run_dir / "adaptive_history.json").write_text(
+            json.dumps(summary, indent=2), encoding="utf-8"
+        )
+        print(
+            f"Adaptive history saved: {len(adaptive_points)} updates, "
+            f"{points_arr.shape} points."
+        )
 
     write_history_csv(history, run_dir)
     (run_dir/"history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
