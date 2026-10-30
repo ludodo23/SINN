@@ -19,7 +19,7 @@ import time
 from tqdm import trange, tqdm
 from dataclasses import replace
 
-from adaptive_weights import GradientBalancedWeights
+from adaptive_weights import GradNormWeights
 
 
 
@@ -246,11 +246,15 @@ def train(
         "continuity", "vof", "momentum",
         "initial", "wall", "pressure_gauge",
     )
-    weight_balancer = GradientBalancedWeights(
+    weight_balancer = GradNormWeights(
         weight_names,
-        beta=cfg.weight_ema_beta,
+        alpha=getattr(cfg, "gradnorm_alpha", 0.5),
+        lr=getattr(cfg, "gradnorm_lr", 1e-3),
         min_weight=cfg.min_adaptive_weight,
         max_weight=cfg.max_adaptive_weight,
+        # Use the last linear layer of the backbone as shared parameters
+        # (recommended in the GradNorm paper for efficiency and representativeness).
+        shared_params=lambda m: list(m.backbone[-2].parameters()),
     )
 
     history = []

@@ -148,10 +148,11 @@ class Config:
     temporal_replay_fraction: float = 0.25
 
     # Pondération adaptative des pertes
-    weight_update_interval: int = 100
-    weight_ema_beta: float = 0.95
+    weight_update_interval = 1
     min_adaptive_weight: float = 0.1
     max_adaptive_weight: float = 10.0
+    gradnorm_alpha: float = 0.5
+    gradnorm_lr: float = 1e-3
 
     # Optimisation
     lbfgs_epochs: int = 1000
@@ -228,7 +229,6 @@ class Config:
         assert self.temporal_window_size > 0
         assert 0.0 <= self.temporal_overlap < self.temporal_window_size
         assert 0.0 <= self.temporal_replay_fraction <= 1.0
-        assert 0.0 < self.weight_ema_beta < 1.0
         assert 0.0 < self.min_adaptive_weight <= self.max_adaptive_weight
         assert self.lbfgs_epochs > 0
         assert self.lbfgs_max_iter > 0
