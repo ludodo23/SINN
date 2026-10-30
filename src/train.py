@@ -170,6 +170,7 @@ def train(
     optimizer: torch.optim.Optimizer | None = None,
     epochs: int | None = None,
     lbfgs_epochs: int | None = None,
+    model_name: str | None = None,
 ):
     """Train the dimensionless laminar sloshing PINN.
 
@@ -190,6 +191,12 @@ def train(
         ``cfg.learning_rate``.
     epochs : int, optional
         Number of training epochs. If None, ``cfg.epochs`` is used.
+    model_name : str, optional
+        Name of the model / folder under which results are saved.
+        If provided, the run directory is ``<output_dir>/<model_name>``
+        instead of the default ``<output_dir>/sloshing_YYYYMMDD_HHMMSS``.
+        If omitted and ``cfg`` carries a ``model_name`` attribute, that
+        value is used.  Otherwise the default timestamped name is kept.
 
     Returns
     -------
@@ -202,20 +209,34 @@ def train(
     run_dir : pathlib.Path
         Directory where checkpoints and logs are saved.
     """
+    # Resolve model_name from argument, then cfg, then fall back to timestamp
+    chosen = model_name
+    if not chosen:
+        chosen = getattr(cfg, "model_name", None) if cfg else None
+    if chosen:
+        root = Path(output_dir); root.mkdir(parents=True, exist_ok=True)
+        run_dir = root / str(chosen)
+    else:
+        root = Path(output_dir); root.mkdir(parents=True, exist_ok=True)
+        run_dir = root / ("sloshing_" + datetime.now().strftime("%Y%m%d_%H%M%S"))
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # Resolve cfg: prefer provided cfg, then fall back to model.cfg, then default Config()
+    if cfg is None and model is not None:
+        cfg = getattr(model, "cfg", None)
     cfg = cfg or Config()
     if hasattr(cfg, "validate"): cfg.validate()
     _validate_scales(cfg)
     set_seed(int(cfg.seed))
     device = torch.device(cfg.device)
     root = Path(output_dir); root.mkdir(parents=True, exist_ok=True)
-    run_dir = root / ("sloshing_" + datetime.now().strftime("%Y%m%d_%H%M%S"))
-    run_dir.mkdir(parents=True, exist_ok=True)
 
     if model is None:
         model = SloshingPINN(config=cfg, state_path=state_path).to(device)
         (run_dir/"config.json").write_text(json.dumps(config_dict(cfg), indent=2), encoding="utf-8")
     else:
         model = model.to(device)
+        (run_dir/"config.json").write_text(json.dumps(config_dict(cfg), indent=2), encoding="utf-8")
 
     
     # Conserver une instance unique du modèle et un seul optimiseur Adam.

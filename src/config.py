@@ -62,6 +62,9 @@ class Config:
         Random seed.
     device : str
         PyTorch device ("cpu" or "cuda").
+    model_name: str | None = None
+        Nom du modèle / dossier de sauvegarde. Si défini, il remplace
+        le nom horodaté par défaut.
     w_continuity, w_vof, w_momentum : float
         Loss weights for physics residuals.
     w_initial : float
