@@ -125,6 +125,9 @@ class GradNormWeights:
         base_norms = []
         for name in self.names:
             loss = losses[name]
+            if not loss.requires_grad:
+                base_norms.append(loss.detach().new_tensor(0.0))
+                continue
             grads = torch.autograd.grad(
                 loss,
                 params,
