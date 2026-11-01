@@ -1,6 +1,11 @@
 
 import torch
 
+"""Sampling utilities for the Sloshing PINN.
+
+Provides functions for generating collocation points, initial points,
+wall points, and adaptive sampling based on physical residuals.
+"""
 
 def sample_interior(n, cfg, device=None):
     """Sample the interior domain in SI units.
@@ -134,7 +139,20 @@ def sample_walls(n, cfg, device=None, include_top=True):
 
 
 def robust_normalize(values, eps=1e-8):
-    """Normalise un score par ses quantiles 10 % et 90 %."""
+    """Normalise a score by its 10% and 90% quantiles.
+
+    Parameters
+    ----------
+    values : torch.Tensor
+        Input values to normalise, will be reshaped to 1D.
+    eps : float, optional
+        Small value added to avoid division by zero. Default is 1e-8.
+
+    Returns
+    -------
+    torch.Tensor
+        Normalised values in [0, 1].
+    """
     values = values.detach().reshape(-1)
     q10 = torch.quantile(values, 0.10)
     q90 = torch.quantile(values, 0.90)
@@ -152,7 +170,34 @@ def adaptive_score(
     w_momentum=0.2,
     w_interface=0.2,
 ):
-    """Score de difficulté par candidat, sans gradient d'entraînement."""
+    """Score of difficulty per candidate, without training gradient.
+
+    Parameters
+    ----------
+    continuity_residual : torch.Tensor
+        Continuity residual per candidate point.
+    vof_residual : torch.Tensor
+        Volume fraction residual per candidate point.
+    momentum_residual : torch.Tensor
+        Momentum residual per candidate point.
+    alpha : torch.Tensor
+        Volume fraction per candidate point.
+    grad_alpha_norm : torch.Tensor
+        Norm of the gradient of alpha per candidate point.
+    w_continuity : float, optional
+        Weight for continuity residual. Default is 0.2.
+    w_vof : float, optional
+        Weight for volume fraction residual. Default is 0.4.
+    w_momentum : float, optional
+        Weight for momentum residual. Default is 0.2.
+    w_interface : float, optional
+        Weight for interface proximity. Default is 0.2.
+
+    Returns
+    -------
+    torch.Tensor
+        Difficulty score per candidate point.
+    """
     rc = robust_normalize(continuity_residual.square())
     rv = robust_normalize(vof_residual.square())
     rm = robust_normalize(momentum_residual)
@@ -174,13 +219,32 @@ def adaptive_score(
 
 def sample_mixed_adaptive(candidates, scores, n, adaptive_fraction=0.5,
                           return_indices=False):
-    """Sélectionne des points uniformes et difficiles sans remplacement.
+    """Select uniform and difficult candidates without replacement.
 
     Parameters
     ----------
+    candidates : torch.Tensor
+        Pool of candidate points to select from.
+    scores : torch.Tensor
+        Difficulty scores corresponding to each candidate.
+    n : int
+        Number of points to select.
+    adaptive_fraction : float, optional
+        Fraction of candidates to select based on difficulty.
+        The remaining ``1 - adaptive_fraction`` will be selected uniformly.
+        Default is 0.5.
     return_indices : bool, optional
-        Si True, renvoie aussi les indices sélectionnés dans ``candidates``.
-        Utile pour retrouver les scores et résidus par point associés.
+        If True, also returns the indices selected from ``candidates``.
+        Useful for retrieving the associated scores and residuals.
+        Default is False.
+
+    Returns
+    -------
+    selected : torch.Tensor
+        Selected candidate points.
+    indices : torch.Tensor, optional
+        Indices of the selected candidates in the original pool.
+        Only returned if ``return_indices`` is True.
     """
     if n > candidates.shape[0]:
         raise ValueError("Le pool candidat doit contenir au moins n points.")

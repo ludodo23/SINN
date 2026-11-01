@@ -1,89 +1,98 @@
-# Sloshing PINN — projet modulaire
+# Sloshing PINN — Modular Physics-Informed Neural Network Project
 
-## Objectif
+## Objective
 
-Prototype de réseau de neurones informé par la physique (PINN)
-pour un problème de ballottement eau-air en deux dimensions.
+Prototype of a physics-informed neural network (PINN) for a two-dimensional
+water–air sloshing problem.
 
-Les équations continues sont utilisées comme résidus d'entraînement.
-Aucun snapshot OpenFOAM n'est utilisé comme donnée d'entraînement.
-OpenFOAM est réservé à la validation indépendante.
+The continuous equations are used as training residuals. No OpenFOAM snapshots
+are used as training data. OpenFOAM is reserved for independent validation.
 
 ## Structure
 
-- config.py : paramètres physiques et numériques.
-- model.py : architecture du réseau.
-- physics.py : propriétés du mélange et dérivées.
-- losses.py : résidus physiques et pertes.
-- sampling.py : échantillonnage des points.
-- train.py : entraînement.
-- visualization.py : visualisation des pertes et des champs.
-- notebooks/01_train.ipynb : entraînement dans Jupyter.
-- notebooks/02_postprocess.ipynb : post-traitement.
+- `config.py` — physical and numerical parameters.
+- `model.py` — neural network architecture with Fourier features.
+- `physics.py` — mixture properties and derivatives.
+- `losses.py` — physical residuals and losses.
+- `sampling.py` — collocation point sampling and adaptive strategies.
+- `train.py` — training loop with mixed uniform/adaptive sampling.
+- `visualization.py` — loss and field visualization.
+- `extract_from_openfoam.py` — OpenFOAM data extraction utility.
+- `notebooks/01_train.ipynb` — training in Jupyter.
+- `notebooks/02_postprocess.ipynb` — post-processing.
 
 ## Installation
 
-Python 3.10 ou supérieur est recommandé.
+Python 3.10 or higher is recommended.
 
-Créer un environnement virtuel :
+Create a virtual environment::
 
     python -m venv .venv
 
-Activer l'environnement sous Linux/macOS :
+Activate it on Linux/macOS::
 
     source .venv/bin/activate
 
-Sous Windows PowerShell :
+On Windows PowerShell::
 
     .venv\Scripts\Activate.ps1
 
-Installer les dépendances :
+Install the dependencies::
 
     pip install -r requirements.txt
 
-## Lancement
+## Launch
 
-Depuis le répertoire du projet :
+From the project directory::
 
     python train.py
 
-Les résultats sont écrits dans outputs/ :
-- sloshing_pinn.pt
-- loss_history.json
+Results are written to ``outputs/``:
+- `sloshing_pinn.pt` — trained model checkpoint
+- `loss_history.json` — training loss history
 
-## Avertissements scientifiques
+## Scientific Warnings
 
-Ce projet est un prototype, pas un modèle validé quantitativement.
+This project is a prototype, not a quantitatively validated model.
 
-Les paramètres de géométrie, propriétés des fluides, mouvement
-du réservoir et niveau initial doivent être vérifiés dans les
-dictionnaires OpenFOAM réels.
+- Geometry parameters, fluid properties, tank motion, and initial level must be
+  checked against the actual OpenFOAM dictionaries.
 
-Le mouvement supposé est :
+The assumed tank motion is ::
 x_tank(t) = A sin(omega*t + phase).
 
-Le réseau prédit la vitesse relative dans le repère du réservoir.
-La pression prédite est la pression mécanique p, pas directement
-le champ OpenFOAM p_rgh.
+The network predicts the relative velocity in the tank reference frame.
+The predicted pressure is the mechanical pressure ``p``, not directly
+the OpenFOAM ``p_rgh`` field.
 
-Le signe de la force de tension superficielle doit être validé
-sur un cas test. La fermeture k-epsilon est simplifiée et ne
-reproduit pas toutes les corrections ni fonctions de paroi
-d'une implémentation OpenFOAM.
+The sign of the surface tension force should be validated on a test case. The k-epsilon closure is simplified and does not reproduce all corrections and wall
+functions of an OpenFOAM implementation.
 
-Attention : le code impose actuellement u=v=0 sur les quatre
-bords du rectangle, y compris le bord supérieur. Si le haut
-du domaine est une ouverture, il faut modifier l'échantillonnage
-et appliquer les conditions aux limites adaptées.
+Warning: the code currently imposes ``u = v = 0`` on all four edges of the
+rectangle, including the top edge. If the top of the domain is an opening, the
+sampling must be modified and appropriate boundary conditions applied.
 
-Les conditions initiales de k et epsilon ne sont pas encore
-imposées explicitement. Les poids des pertes et leur mise à
-l'échelle devront également être étudiés.
+The initial conditions for ``k`` and ``epsilon`` are not yet imposed explicitly.
+  The loss weights and their scaling also need to be studied.
 
-Avant une simulation complète, vérifier :
-1. la géométrie et les patchs ;
-2. l'amplitude, la fréquence et la phase du mouvement ;
-3. les propriétés physiques ;
-4. les conditions initiales et aux limites ;
-5. le signe de la tension superficielle ;
-6. la cohérence du repère et de la pression lors de la validation.
+Before running a full simulation, verify:
+1. Geometry and patches;
+2. Amplitude, frequency and phase of the motion;
+3. Physical properties;
+4. Initial and boundary conditions;
+5. Surface tension sign;
+# GitHub Actions
+
+Documentation is automatically built and deployed to GitHub Pages using a
+GitHub Actions workflow (`.github/workflows/docs.yml`). The workflow:
+
+- Triggers on `push` to `main` and `pull_request`.
+- Installs documentation dependencies.
+- Builds the Sphinx documentation.
+- Deploys the HTML output to GitHub Pages.
+
+## Citation
+
+If you use this code in your research, please cite the project and reference
+the relevant methodology papers for Physics-Informed Neural Networks.
+6. Frame and pressure consistency during validation.

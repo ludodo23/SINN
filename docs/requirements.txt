@@ -1,0 +1,8 @@
+sphinx>=7.0
+sphinx-rtd-theme
+myst-parser>=2.0
+numpydoc>=1.5
+torch
+numpy
+matplotlib
+pyvista

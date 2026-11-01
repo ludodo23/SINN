@@ -12,3 +12,4 @@ API Reference
    train
    visualization
    extract_from_openfoam
+   adaptive_weights

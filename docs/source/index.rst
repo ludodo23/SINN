@@ -113,3 +113,5 @@ Indices and tables
 * :ref:`genindex`
 * :ref:`modindex`
 * :ref:`search`
+.. note::
+   Automated documentation is available at ``GitHub Pages <https://ludodo23.github.io/SINN/>``.

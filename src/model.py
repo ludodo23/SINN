@@ -15,7 +15,18 @@ from config import Config
 
 
 class FourierFeatures(nn.Module):
-    """Encodage sinusoïdal de coordonnées adimensionnelles."""
+    """Encodage sinusoïdal de coordonnées adimensionnelles.
+
+    Parameters
+    ----------
+    bands : tuple of int, optional
+        Frequencies for the sinusoidal encoding. Default is ``(1, 2, 4, 8, 16)``.
+
+    Returns
+    -------
+    out_features : int
+        Number of output features : 3 (coordinates) + 6 * len(bands).
+    """
 
     def __init__(self, bands=(1, 2, 4, 8, 16)):
         super().__init__()
@@ -29,6 +40,13 @@ class FourierFeatures(nn.Module):
 
     @property
     def out_features(self):
+        """Number of output features.
+
+        Returns
+        -------
+        int
+            Number of output features : 3 (coordinates) + 6 * len(bands).
+        """
         return 3 + 6 * self.bands.numel()
 
     def forward(self, coords):
@@ -59,6 +77,12 @@ class SloshingPINN(nn.Module):
     config : str, pathlib.Path, dict, Config instance, or None, optional
         Configuration source. Can be a JSON file path, a dictionary,
         a ``Config`` instance, or ``None`` (uses default width/layers).
+
+    Returns
+    -------
+    dict[str, torch.Tensor]
+        Dictionary with keys ``(u, v, p, alpha)`` containing the
+        non-dimensional predicted fields.
     """
 
     def __init__(
@@ -171,6 +195,11 @@ class SloshingPINN(nn.Module):
         ------
         ValueError
             If the model was built without a configuration.
+
+        Notes
+        -----
+        The coordinates are first non-dimensionalised using the configuration
+        reference scales before being passed to the network.
         """
         if self.cfg is None:
             raise ValueError("predict_physical requires the Config used to build the model.")
