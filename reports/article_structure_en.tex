@@ -1,0 +1,177 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{geometry}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{siunitx}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\geometry{margin=2.5cm}
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+\title{Improving a PINN for Violent Sloshing Simulation\\
+\large Interface Representation, Adaptive Sampling, and Temporal Training}
+\author{Ludovic Andrieux}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+[Abstract de 150--250 mots : contexte, difficulté principale, méthode proposée, protocole de validation et résultats quantitatifs à compléter.]
+\par\noindent\textbf{Keywords :} PINN ; ballottement ; écoulement diphasique ; fraction volumique ; interface libre ; échantillonnage adaptatif ; optimisation.
+\end{abstract}
+
+\section{Introduction}
+\subsection{Background and motivation}
+Introduce tank sloshing and free-surface flows, particularly violent impacts and wave breaking.
+\subsection{Limitations of numerical methods and PINNs}
+Briefly describe conventional CFD methods (including interFoam) and PINN challenges: steep gradients, diffuse interfaces, imbalanced losses, and global-in-time training.
+\subsection{Objectives and contributions}
+List only contributions demonstrated in the paper. For example:
+\begin{itemize}[nosep]
+  \item encodage de Fourier optionnel des coordonnées ;
+  \item échantillonnage guidé par l'interface et les résidus physiques ;
+  \item entraînement par fenêtres temporelles avec transfert des poids ;
+  \item pondération adaptative des pertes et optimisation Adam puis L-BFGS ;
+  \item évaluation quantitative de la précision, du coût et de la localisation de l'interface.
+\end{itemize}
+
+\section{Physical Problem}
+\subsection{Tank geometry and excitation}
+Define the geometry, imposed motion, initial conditions, and physical parameters.
+\subsection{Governing equations}
+Present the incompressible flow and momentum equations with volume-fraction-dependent properties. State assumptions and the surface-tension model actually used.
+\subsection{Volume fraction and interface}
+Define $\alpha$ and the phase convention. Give the transport equation used in the code and discuss interface regularization.
+\subsection{Initial and boundary conditions}
+Document the implemented conditions: walls, open or closed top, initial state, and pressure gauge.
+
+\section{Baseline PINN}
+\subsection{Inputs, outputs, and normalization}
+Describe nondimensional coordinates $(x^*,y^*,t^*)$, predicted variables $(u^*,v^*,p^*,\alpha)$, and reference scales.
+\subsection{Network architecture}
+Describe the baseline architecture in \texttt{src/model.py}: dense layers, Tanh activation, and sigmoid-bounded $\alpha$ output.
+\subsection{Loss function}
+Écrire la perte totale sous la forme
+\[
+\mathcal{L}=\lambda_c\mathcal{L}_{c}
++\lambda_\alpha\mathcal{L}_{\alpha}
++\lambda_m\mathcal{L}_{m}
++\lambda_0\mathcal{L}_{0}
++\lambda_w\mathcal{L}_{w}
++\lambda_p\mathcal{L}_{p}.
+\]
+Define each term according to the actual implementation, including units and normalization.
+\subsection{Limitations of the baseline}
+Describe observed interface diffusion or displacement, impact-region errors, and optimization difficulties. Distinguish measured observations from hypotheses.
+
+\section{Proposed Methods}
+\subsection{Optional Fourier feature encoding}
+Présenter l'encodage des coordonnées, ses fréquences et le contrôle expérimental permettant de l'activer ou le désactiver.
+\subsection{Optional adaptive sampling}
+Décrire le bassin de candidats, le score combinant proximité de $\alpha=0.5$, gradient de $\alpha$ et résidus de continuité, transport et quantité de mouvement, ainsi que la fraction de points conservée uniformément.
+\subsection{Temporal windows and weight transfer}
+Describe window lengths, overlap, initialization from the previous window's weights, and replay strategy. Explain how temporal forgetting is mitigated.
+\subsection{Optional adaptive loss weighting}
+Décrire la méthode choisie (par exemple équilibrage fondé sur les normes de gradients), l'EMA éventuelle, les bornes des poids et la fréquence de mise à jour.
+\subsection{Optional Adam followed by L-BFGS}
+Présenter les étapes, le critère de passage à L-BFGS et l'utilisation de points fixes pendant chaque fermeture L-BFGS.
+\subsection{Combinations and ablation study}
+Préciser quelles options sont indépendamment activables et quelles combinaisons seront testées.
+
+\section{Experimental Protocol}
+\subsection{Test case and CFD reference}
+Décrire le cas de ballottement, les propriétés des fluides, l'excitation, les conditions aux limites et les paramètres interFoam. Les données CFD ne doivent pas servir à l'entraînement si l'objectif est un PINN autonome ; préciser si elles sont utilisées uniquement pour l'évaluation.
+\subsection{Experimental design}
+Présenter au minimum : PINN de base, chaque option seule, combinaisons sélectionnées et répétitions avec graines différentes.
+\subsection{Metrics}
+\begin{itemize}[nosep]
+\item erreur de fraction volumique et erreur de localisation de l'interface ;
+\item distance entre interfaces (par exemple distance de Hausdorff ou distance moyenne), si applicable ;
+\item erreur sur les vitesses et pression lorsque des références sont disponibles ;
+\item résidus physiques et stabilité de l'entraînement ;
+\item temps total, temps par époque, mémoire GPU/CPU et nombre d'évaluations ;
+\item robustesse lors des impacts et de la rupture de vagues.
+\end{itemize}
+\subsection{Reproducibility details}
+Report software versions, hardware, numerical precision, random seeds, compute budgets, hyperparameters, and scripts.
+
+\section{Results}
+\subsection{Implementation verification}
+Présenter tests unitaires des résidus, normalisation, dérivées automatiques et options de configuration.
+\subsection{Results de référence}
+Présenter les performances du PINN non modifié.
+\subsection{Effect of each improvement}
+Une sous-section par option : Fourier, échantillonnage adaptatif, fenêtres temporelles, pondération adaptative et L-BFGS.
+\subsection{Comparison of combined methods}
+Présenter les interactions, les compromis précision/coût et les échecs éventuels.
+
+\begin{table}[h!]
+\centering
+\caption{Comparaison des 16 configurations de modèle testées}
+\begin{tabular}{lccccc}
+\toprule
+Configuration & RMSE u moy. & RMSE v moy. & RMSE p moy. & RMSE α moy. & Temps d'entraînement (s) \\
+\midrule
+model\_ff0\_as0\_ts0\_alw0 & 0.770 & 0.189 & 3724.733 & 0.490 & 45.083 \\
+model\_ff0\_as0\_ts0\_alw1 & 0.774 & 0.188 & 3680.937 & 0.491 & 22.982 \\
+model\_ff0\_as0\_ts1\_alw0 & 0.771 & 0.210 & 3641.053 & 0.492 & 13.475 \\
+model\_ff0\_as0\_ts1\_alw1 & 0.768 & 0.199 & 3858.882 & 0.492 & 22.744 \\
+model\_ff0\_as1\_ts0\_alw0 & 0.770 & 0.191 & 3876.398 & 0.491 & 14.481 \\
+model\_ff0\_as1\_ts0\_alw1 & 0.772 & 0.188 & 3718.598 & 0.492 & 21.664 \\
+model\_ff0\_as1\_ts1\_alw0 & 0.777 & 0.211 & 3537.408 & 0.493 & 16.883 \\
+model\_ff0\_as1\_ts1\_alw1 & 0.777 & 0.195 & 3732.812 & 0.493 & 21.696 \\
+model\_ff1\_as0\_ts0\_alw0 & 0.768 & 0.196 & 4207.534 & 0.486 & 17.317 \\
+model\_ff1\_as0\_ts0\_alw1 & 0.766 & 0.197 & 4224.921 & 0.486 & 16.375 \\
+model\_ff1\_as0\_ts1\_alw0 & 0.779 & 0.198 & 4169.999 & 0.481 & 6.685 \\
+model\_ff1\_as0\_ts1\_alw1 & 0.777 & 0.210 & 4177.826 & 0.481 & 10.498 \\
+model\_ff1\_as1\_ts0\_alw0 & 0.766 & 0.221 & 4198.084 & 0.484 & 8.281 \\
+model\_ff1\_as1\_ts0\_alw1 & 0.767 & 0.231 & 4209.499 & 0.484 & 13.663 \\
+model\_ff1\_as1\_ts1\_alw0 & 0.778 & 0.223 & 4139.737 & 0.480 & 8.122 \\
+model\_ff1\_as1\_ts1\_alw1 & 0.778 & 0.265 & 4152.172 & 0.480 & 11.787 \\
+\bottomrule
+\end{tabular}
+\label{tab:benchmark_results}
+\end{table}
+
+\textbf{Tableau 1 :} Résultats du benchmark sur 16 configurations (50 époques chacune). Les RMSE sont moyennes sur l'ensemble des temps d'évaluation. Le temps d'entraînement est donné en secondes.
+\subsection{Interface and impact visualizations}
+Insérer des champs $\alpha$, contours $\alpha=0.5$, champs de vitesse et profils temporels. Comparer à interFoam uniquement pour l'évaluation, si cette référence est disponible.
+
+\section{Discussion}
+\subsection{Pourquoi les modifications fonctionnent ou échouent}
+Interpréter les résultats sans attribuer une causalité non démontrée.
+\subsection{Computational cost and scalability}
+Discuter le coût des dérivées d'ordre élevé, du score adaptatif et de L-BFGS.
+\subsection{Limitations}
+Décrire les limites du modèle physique, de la représentation de l'interface, des conditions aux limites et de la validation.
+\subsection{Reproducibility and autonomy}
+Préciser ce qui est appris sans données CFD et ce qui nécessite une référence externe pour l'évaluation.
+
+\section{Conclusions and Future Work}
+Summarize measured findings, the most effective improvements, and future work.
+
+\section*{Code and Data Availability}
+[URL du dépôt, commit utilisé, scripts, configurations et modalités de disponibilité des données.]
+
+\section*{Author Contributions}
+[À compléter.]
+
+\section*{Funding and Conflicts of Interest}
+[À compléter.]
+
+\bibliographystyle{plain}
+\bibliography{references}
+
+\appendix
+\section{Complete Parameters}
+[Tableau des paramètres physiques, numériques et d'entraînement.]
+\section{Detailed Loss Definitions}
+[Formules exactes, conventions de signe et facteurs d'échelle.]
+\section{Algorithms}
+[Algorithms/pseudocode pour l'échantillonnage adaptatif et les fenêtres temporelles.]
+\end{document}

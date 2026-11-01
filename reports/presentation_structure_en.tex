@@ -1,0 +1,173 @@
+\documentclass[aspectratio=169,11pt]{beamer}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usetheme{Madrid}
+\title[PINN et ballottement]{Improving a PINN for Violent Sloshing Simulation}
+\subtitle{Interface libre, échantillonnage adaptatif et entraînement temporel}
+\author{[Author(s)]}
+\institute{[Laboratory / institution]}
+\date{[Date]}
+
+\begin{document}
+\begin{frame}
+  \titlepage
+\end{frame}
+
+\begin{frame}{Outline}
+  \tableofcontents
+\end{frame}
+
+\section{Background and Objectives}
+\begin{frame}{Why is violent sloshing challenging?}
+\begin{itemize}
+  \item Interface libre fortement déformée ; vagues raides, impacts et éventuelle rupture.
+  \item Besoin de prédire vitesse, pression et fraction volumique.
+  \item Main issue: a diffuse or incorrectly located PINN interface.
+\end{itemize}
+\vspace{0.4cm}
+\textbf{Question :} quelles modifications améliorent l'interface sans utiliser les champs interFoam pendant l'entraînement ?
+\end{frame}
+
+\begin{frame}{Objectives and contributions}
+\begin{itemize}
+  \item Ajouter quatre mécanismes activables indépendamment.
+  \item Comparer précision, robustesse et coût de calcul.
+  \item Conserver une procédure reproductible et un PINN autonome.
+\end{itemize}
+\textit{Remplacer cette diapositive par les contributions réellement validées.}
+\end{frame}
+
+\section{Physical problem et PINN}
+\begin{frame}{Physical problem}
+\begin{itemize}
+  \item Géométrie du réservoir : [dimensions].
+  \item Excitation : [translation/rotation, amplitude, fréquence].
+  \item Fluides : [densités, viscosités, tension superficielle].
+  \item Conditions initiales et limites : [à préciser].
+\end{itemize}
+\begin{center}
+\fbox{\parbox{0.75\linewidth}{Insert a tank diagram showing the initial liquid level and imposed motion.}}
+\end{center}
+\end{frame}
+
+\begin{frame}{Baseline PINN}
+\begin{itemize}
+  \item Entrées : coordonnées normalisées $(x^*,y^*,t^*)$.
+  \item Sorties : $(u^*,v^*,p^*,\alpha)$.
+  \item Réseau dense Tanh ; $\alpha$ bornée par sigmoïde.
+  \item Pertes : continuité, transport de $\alpha$, quantité de mouvement, initiale, parois et jauge de pression.
+\end{itemize}
+\[
+\mathcal L=\lambda_c\mathcal L_c+\lambda_\alpha\mathcal L_\alpha+
+\lambda_m\mathcal L_m+\lambda_0\mathcal L_0+\lambda_w\mathcal L_w+\lambda_p\mathcal L_p
+\]
+\end{frame}
+
+\section{Proposed Methods}
+\begin{frame}{Option 1 — Fourier features}
+\begin{itemize}
+  \item Transformer les coordonnées en composantes sinusoïdales multi-échelles.
+  \item Hypothesis: better representation of steep spatial and temporal gradients.
+  \item Ablation : mêmes données d'entraînement, mêmes budgets et graines.
+\end{itemize}
+\[
+\gamma(z)=[z,\sin(2\pi Bz),\cos(2\pi Bz)]
+\]
+\textit{Insérer un schéma ou les fréquences réellement utilisées.}
+\end{frame}
+
+\begin{frame}{Option 2 — Adaptive sampling}
+\begin{itemize}
+  \item Generate a pool of candidate collocation points.
+  \item Prioritize the interface ($\alpha\approx0.5$), large gradients, and high residuals.
+  \item Retain a uniform fraction of points to cover the full domain.
+\end{itemize}
+\textbf{À surveiller :} coût de calcul des résidus et diversité des points.
+\end{frame}
+
+\begin{frame}{Option 3 — Temporal windows}
+\begin{itemize}
+  \item Train successively over time windows.
+  \item Initialize from the previous window's weights.
+  \item Use overlap or replay samples to reduce temporal forgetting.
+\end{itemize}
+\textit{Insérer un diagramme des fenêtres et préciser la stratégie de causalité.}
+\end{frame}
+
+\begin{frame}{Option 4 — Adaptive loss weighting}
+\begin{itemize}
+  \item Estimate the relative gradient scales of the different loss terms.
+  \item Update weights using smoothing and bounds.
+  \item Comparer aux poids fixes de la configuration de référence.
+\end{itemize}
+\textbf{Point de vigilance :} les poids adaptatifs doivent rester stables et interprétables.
+\end{frame}
+
+\begin{frame}{Optimization: Adam followed by L-BFGS}
+\begin{itemize}
+  \item Adam for the initial optimization phase.
+  \item L-BFGS refinement with fixed collocation points and loss weights inside the closure.
+  \item Comparer le temps total, la convergence et les résidus finaux.
+\end{itemize}
+\end{frame}
+
+\section{Experimental Protocol and Results}
+\begin{frame}{Outline expérimental}
+\begin{enumerate}
+  \item PINN de base.
+  \item Chaque option activée individuellement.
+  \item Combinaisons retenues et répétitions avec plusieurs graines.
+  \item InterFoam utilisé comme référence d'évaluation, pas comme donnée d'entraînement.
+\end{enumerate}
+\end{frame}
+
+\begin{frame}{Evaluation metrics}
+\begin{itemize}
+  \item Erreur de $\alpha$ et distance entre interfaces $\alpha=0.5$.
+  \item Erreurs de vitesse/pression si une référence existe.
+  \item Résidus physiques et stabilité pendant les impacts.
+  \item Temps d'entraînement, temps par époque et mémoire utilisée.
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Results — summary table}
+\centering
+\begin{tabular}{lccc}
+\toprule
+Configuration & Erreur interface & Temps d'entraînement & Résidu physique \\
+\midrule
+PINN de base & 0.490 & 45.083 & 3724.733 \\
+Fourier & 0.486 & 17.317 & 4207.534 \\
+Échantillonnage adaptatif & 0.491 & 14.481 & 3876.398 \\
+Fenêtres temporelles & 0.492 & 13.475 & 3641.053 \\
+Pertes adaptatives & 0.492 & 22.982 & 3680.937 \\
+Combinaison finale (ff=1,as=1,ts=1,alw=0) & 0.480 & 6.685 & 4169.999 \\
+\bottomrule
+\end{tabular}
+\end{frame}
+
+\begin{frame}{Visualizations to include}
+\begin{itemize}
+  \item Contours de $\alpha$ à plusieurs instants et contour $\alpha=0.5$.
+  \item Comparaison PINN / interFoam sur les mêmes instants.
+  \item Zoom sur l'impact et les zones de forte courbure.
+  \item Courbes d'apprentissage et temps cumulés.
+\end{itemize}
+\end{frame}
+
+\section{Conclusion}
+\begin{frame}{Conclusions and next steps}
+\begin{itemize}
+  \item Main finding: [complete after measurements].
+  \item Modification la plus efficace : [à compléter].
+  \item Limites et travaux futurs : [à compléter].
+\end{itemize}
+\vfill
+\centering \Large Questions ?
+\end{frame}
+
+\end{document}
