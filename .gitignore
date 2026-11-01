@@ -120,3 +120,7 @@ Desktop.ini
 *.tmp
 *.temp
 *.cache
+
+reports/*.npz
+reports/*.json
+reports/*.csv
