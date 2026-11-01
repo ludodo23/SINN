@@ -11,6 +11,8 @@ from torch import nn
 
 import math
 
+from config import Config
+
 
 class FourierFeatures(nn.Module):
     """Encodage sinusoïdal de coordonnées adimensionnelles."""
@@ -69,8 +71,9 @@ class SloshingPINN(nn.Module):
         # Resolve configuration: JSON path, Config/dict object, or None.
         if isinstance(config, (str, Path)):
             config_path = Path(config)
-            with config_path.open("r", encoding="utf-8") as f:
-                config = json.load(f)
+            config = Config.load_json(config_path)
+            # with config_path.open("r", encoding="utf-8") as f:
+            #     config = json.load(f)
 
         self.cfg = config
 
