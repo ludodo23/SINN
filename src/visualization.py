@@ -348,6 +348,9 @@ def build_sinn_data_from_model(
     return {
         "time": times,
         "X": X_of,
+        "u": predictions["u"],
+        "v": predictions["v"],
+        "p": predictions["p"],
         "alpha": predictions["alpha"],
     }
 
