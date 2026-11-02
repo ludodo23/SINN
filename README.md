@@ -8,6 +8,13 @@ water–air sloshing problem.
 The continuous equations are used as training residuals. No OpenFOAM snapshots
 are used as training data. OpenFOAM is reserved for independent validation.
 
+## License 
+This project is licensed under the CeCILL-C license.
+
+See:
+* LICENSE.fr (version française officielle) or https://cecill.info/licences/Licence_CeCILL-C_V1-fr.html for online version.
+* LICENSE.en (official English translation) or https://cecill.info/licences/Licence_CeCILL-C_V1-en.html for online version.
+
 ## Structure
 
 - `config.py` — physical and numerical parameters.
