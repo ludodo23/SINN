@@ -207,14 +207,14 @@ def plot_fields(
         Z = prediction[field].cpu().numpy().reshape(ny, nx)
 
         if of is None:
-            plt.figure()
-            plt.contourf(X, Y, Z, levels=40)
-            plt.colorbar(label=field)
-            plt.xlabel("x [m]")
-            plt.ylabel("y [m]")
-            plt.title(f"{field} at t = {t:g} s")
-            plt.tight_layout()
-            plt.show()
+            fig, ax = plt.subplots(figsize=(8, 5))
+            im = ax.contourf(X, Y, Z, levels=40)
+            cbar = fig.colorbar(im, ax=ax, label=field)
+            ax.set_xlabel("x [m]")
+            ax.set_ylabel("y [m]")
+            ax.set_title(f"{field} at t = {t:.4f} s")
+            ax.set_aspect("equal", adjustable="box")
+            return fig
         else:
             # Three panels: OpenFOAM, model, relative error.
             Z_of = np.asarray(of[field])[i_t].reshape(ny, nx, order="F")
@@ -247,7 +247,7 @@ def plot_fields(
 
             fig.suptitle(f"{field} at t = {t:g} s")
             fig.tight_layout()
-            plt.show()
+            return fig
 
 
 def _load_animation_data(data):

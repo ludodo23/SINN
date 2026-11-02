@@ -98,26 +98,6 @@ class Config:
     mu_ref: float = 0.000998
     gravity_ref: float = 9.81
 
-    def mu_water(self) -> float:
-        """Return the dynamic viscosity of water [Pa·s].
-
-        Returns
-        -------
-        float
-            Dynamic viscosity of water.
-        """
-        return self.rho_water * self.nu_water
-
-    def mu_air(self) -> float:
-        """Return the dynamic viscosity of air [Pa·s].
-
-        Returns
-        -------
-        float
-            Dynamic viscosity of air.
-        """
-        return self.rho_air * self.nu_air
-
     # Mouvement horizontal du réservoir
     tank_amplitude: float = 2.0
     tank_omega: float = 0.5

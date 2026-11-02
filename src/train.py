@@ -272,10 +272,10 @@ def train(
 
     if model is None:
         model = SloshingPINN(config=cfg, state_path=state_path).to(device)
-        (run_dir/"config.json").write_text(json.dumps(config_dict(cfg), indent=2), encoding="utf-8")
+        cfg.save_json(run_dir / "config.json")
     else:
         model = model.to(device)
-        (run_dir/"config.json").write_text(json.dumps(config_dict(cfg), indent=2), encoding="utf-8")
+        cfg.save_json(run_dir / "config.json")
 
     
     # Conserver une instance unique du modèle et un seul optimiseur Adam.
@@ -624,6 +624,9 @@ def train(
     (run_dir/"history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
 
     print(f"Training finished. Results saved to: {run_dir}")
+
+    # Save model weights as checkpoint (weights-only, compatible with SloshingPINN.load)
+    torch.save(model.state_dict(), run_dir / "checkpoint_final.pt")
 
     return model, history, run_dir
 

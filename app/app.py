@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 import numpy as np
+import matplotlib.pyplot as plt
 import streamlit as st
 import torch
 
@@ -14,13 +15,18 @@ if ROOT.name == "notebooks":
     ROOT = ROOT.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+from visualization import load_model, build_sinn_data_from_model, plot_fields
+
+
 # ---------------------------------------------------------------------------
 # Helper: liste des modèles entraînés
 # ---------------------------------------------------------------------------
 def list_trained_models(base_dir: Path = Path("models")):
     """Return a list of model dicts with name, checkpoint, config, history."""
     models = []
+    print(f"Searching for trained models in {base_dir}")
     if not base_dir.exists():
+        print(f"Directory {base_dir} does not exist.")
         return models
     for model_dir in sorted(base_dir.iterdir()):
         if not model_dir.is_dir():
@@ -55,6 +61,8 @@ def list_trained_models(base_dir: Path = Path("models")):
                         "config": str(cfg),
                     }
                 )
+    print(f"Found {len(models)} trained models.")
+    return models
 # Page : Pertes d'entraînement
 # ---------------------------------------------------------------------------
 def page_losses(models):
@@ -130,8 +138,6 @@ def page_fields(models):
             try:
                 if of_available:
                     # On utilise plot_fields qui gère OpenFOAM + PINN en 3 panneaux
-                    from visualization import plot_fields
-
                     fig = plot_fields(
                         model=model,
                         t=t,
