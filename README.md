@@ -95,4 +95,139 @@ GitHub Actions workflow (`.github/workflows/docs.yml`). The workflow:
 
 If you use this code in your research, please cite the project and reference
 the relevant methodology papers for Physics-Informed Neural Networks.
+
+## Installation (detailed)
+
+Python 3.10 or higher is recommended.
+
+Create a virtual environment::
+
+    python -m venv .venv
+
+Activate it on Linux/macOS::
+
+    source .venv/bin/activate
+
+On Windows PowerShell::
+
+    .venv\\Scripts\\Activate.ps1
+
+Install the dependencies::
+
+    pip install -r requirements.txt
+
+## Launch
+
+From the project directory::
+
+    python train.py
+
+Results are written to ``outputs/``:
+
+- `sloshing_pinn.pt` — trained model checkpoint
+- `loss_history.json` — training loss history
+- `adaptive_history.npz` — adaptive sampling history (if enabled)
+- `benchmark.csv` — per-epoch training metrics
+
+## Scientific Warnings
+
+This project is a prototype, not a quantitatively validated model.
+
+- Geometry parameters, fluid properties, tank motion, and initial level must be
+  checked against the actual OpenFOAM dictionaries.
+
+- The assumed tank motion is::
+
+    x_tank(t) = A * sin(omega * t + phase)
+
+- The network predicts the relative velocity in the tank reference frame.
+  The predicted pressure is the mechanical pressure ``p``, not directly
+  the OpenFOAM ``p_rgh`` field.
+
+- The sign of the surface tension force should be validated on a test case.
+  The k-epsilon closure is simplified and does not reproduce all corrections
+  and wall functions of an OpenFOAM implementation.
+
+- Warning: the code currently imposes ``u = v = 0`` on all four edges of the
+  rectangle, including the top edge. If the top of the domain is an opening,
+  the sampling must be modified and appropriate boundary conditions applied.
+
+- The initial conditions for ``k`` and ``epsilon`` are not yet imposed explicitly.
+  The loss weights and their scaling also need to be studied.
+
+Before running a full simulation, verify:
+
+1. Geometry and patches;
+2. Amplitude, frequency and phase of the motion;
+3. Physical properties;
+4. Initial and boundary conditions;
+5. Surface tension sign;
+6. Frame and pressure consistency during validation.
+
+## Installation (detailed)
+
+Python 3.10 or higher is recommended.
+
+Create a virtual environment::
+
+    python -m venv .venv
+
+Activate it on Linux/macOS::
+
+    source .venv/bin/activate
+
+On Windows PowerShell::
+
+    .venv\\Scripts\\Activate.ps1
+
+Install the dependencies::
+
+    pip install -r requirements.txt
+
+## Launch
+
+From the project directory::
+
+    python train.py
+
+Results are written to ``outputs/``:
+
+- `sloshing_pinn.pt` — trained model checkpoint
+- `loss_history.json` — training loss history
+- `adaptive_history.npz` — adaptive sampling history (if enabled)
+- `benchmark.csv` — per-epoch training metrics
+
+## Scientific Warnings
+
+This project is a prototype, not a quantitatively validated model.
+
+- Geometry parameters, fluid properties, tank motion, and initial level must be
+  checked against the actual OpenFOAM dictionaries.
+
+- The assumed tank motion is::
+
+    x_tank(t) = A * sin(omega * t + phase)
+
+- The network predicts the relative velocity in the tank reference frame.
+  The predicted pressure is the mechanical pressure ``p``, not directly
+  the OpenFOAM ``p_rgh`` field.
+
+- The sign of the surface tension force should be validated on a test case.
+  The k-epsilon closure is simplified and does not reproduce all corrections
+  and wall functions of an OpenFOAM implementation.
+
+- Warning: the code currently imposes ``u = v = 0`` on all four edges of the
+  rectangle, including the top edge. If the top of the domain is an opening,
+  the sampling must be modified and appropriate boundary conditions applied.
+
+- The initial conditions for ``k`` and ``epsilon`` are not yet imposed explicitly.
+  The loss weights and their scaling also need to be studied.
+
+Before running a full simulation, verify:
+
+1. Geometry and patches;
+2. Amplitude, frequency and phase of the motion;
+3. Physical properties;
+4. Initial and boundary conditions;
+5. Surface tension sign;
 6. Frame and pressure consistency during validation.

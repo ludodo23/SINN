@@ -129,6 +129,30 @@ def score_candidates(model, candidates, cfg):
 
 
 def make_time_windows(t_min, t_max, width, overlap=0.0):
+    """Create time windows for temporal segmentation training.
+
+    Parameters
+    ----------
+    t_min : float
+        Minimum time value [s].
+    t_max : float
+        Maximum time value [s].
+    width : float
+        Width of each time window [s]. Must be positive.
+    overlap : float, optional
+        Overlap between consecutive windows [s]. Must be in [0, width).
+        Default is 0.0 (no overlap).
+
+    Returns
+    -------
+    list of tuple
+        List of (t_left, t_right) time window pairs.
+
+    Raises
+    ------
+    ValueError
+        If ``width <= 0`` or ``overlap < 0`` or ``overlap >= width``.
+    """
     if width <= 0:
         raise ValueError("width doit être positif.")
     if overlap < 0 or overlap >= width:
@@ -150,6 +174,21 @@ def make_time_windows(t_min, t_max, width, overlap=0.0):
 
 
 def write_history_csv(history, run_dir):
+    """Write training history to a CSV file.
+
+    Parameters
+    ----------
+    history : list of dict
+        List of dictionaries containing training metrics. Each dictionary
+        should have the same keys (e.g., ``epoch``, ``continuity``, etc.).
+    run_dir : str or pathlib.Path
+        Directory where the benchmark CSV file will be saved.
+
+    Raises
+    ------
+    ValueError
+        If ``history`` is empty or dictionaries have inconsistent keys.
+    """
     if not history:
         return
 
