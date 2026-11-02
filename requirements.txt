@@ -187,3 +187,4 @@ websocket-client==1.9.2
 widgetsnbextension==4.0.16
 wslink==2.5.7
 yarl==1.25.1
+streamlit==1.38.0
