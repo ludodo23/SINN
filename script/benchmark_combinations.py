@@ -1,3 +1,4 @@
+import argparse
 import itertools
 import json
 import os
@@ -80,7 +81,7 @@ def run_inference_and_error(model, cfg, data_npz_path, device):
         "rmse_p": rmse_p,
         "rmse_alpha": rmse_alpha,
     }
-def main():
+def main(epochs=50, seed=1234):
     results_dir = ROOT / "reports"
     models_dir = ROOT / "models"
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -93,10 +94,11 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    print(f"Training for {epochs} epochs (seed={seed})")
 
     base_kwargs = dict(
-        epochs=50,
-        seed=1234,
+        epochs=epochs,
+        seed=seed,
     )
 
     flags = [
@@ -212,4 +214,22 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(
+        description="Run benchmark combinations of SloshingPINN configurations."
+    )
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=50,
+        help="Number of training epochs (default: 50). Must be a positive integer.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=1234,
+        help="Random seed (default: 1234).",
+    )
+    args = parser.parse_args()
+    if args.epochs <= 0:
+        parser.error("--epochs must be a positive integer.")
+    main(epochs=args.epochs, seed=args.seed)
