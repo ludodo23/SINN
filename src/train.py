@@ -182,7 +182,7 @@ def write_history_csv(history, run_dir):
         List of dictionaries containing training metrics. Each dictionary
         should have the same keys (e.g., ``epoch``, ``continuity``, etc.).
     run_dir : str or pathlib.Path
-        Directory where the benchmark CSV file will be saved.
+        Directory where the history CSV file will be saved.
 
     Raises
     ------
@@ -192,13 +192,30 @@ def write_history_csv(history, run_dir):
     if not history:
         return
 
-    path = Path(run_dir) / "benchmark.csv"
+    path = Path(run_dir) / "history.csv"
     fieldnames = list(history[0].keys())
 
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(history)
+
+
+def _next_numbered_file(run_dir, prefix, suffix):
+    """Return the next available index for numbered files like prefixNNsuffix.
+
+    Scans ``run_dir`` for files whose name matches ``prefix`` + digits + ``suffix``
+    and returns ``max(existing) + 1`` (or 1 when none exist). Used to avoid
+    overwriting previously created checkpoint/history backups on resume.
+    """
+    import re
+    pattern = re.compile(rf"^{re.escape(prefix)}(\d+){re.escape(suffix)}$")
+    nums = []
+    for path in Path(run_dir).iterdir():
+        m = pattern.match(path.name)
+        if m:
+            nums.append(int(m.group(1)))
+    return (max(nums) + 1) if nums else 1
 
 
 def train(
@@ -210,6 +227,7 @@ def train(
     epochs: int | None = None,
     lbfgs_epochs: int | None = None,
     model_name: str | None = None,
+    resume: bool = False,
 ):
     """Train the dimensionless laminar sloshing PINN.
 
@@ -236,6 +254,11 @@ def train(
         instead of the default ``<output_dir>/sloshing_YYYYMMDD_HHMMSS``.
         If omitted and ``cfg`` carries a ``model_name`` attribute, that
         value is used.  Otherwise the default timestamped name is kept.
+    resume : bool, optional
+        If True, resume training from a previously saved state in
+        ``run_dir`` (load ``history.json`` and ``checkpoint_final.pt``,
+        back up existing files, and continue from the last completed epoch).
+        Default is ``False``.
 
     Returns
     -------
@@ -322,10 +345,67 @@ def train(
         # Use the last linear layer of the backbone as shared parameters
         # (recommended in the GradNorm paper for efficiency and representativeness).
         shared_params=lambda m: list(m.backbone[-2].parameters()),
-    )
+    )  # end of weight_balancer setup
 
-    history = []
-    global_epoch = 0
+    # === Resume from a previous training state (if requested) ===
+    start_epoch = 0
+    resumed = False
+    if resume:
+        history_path = run_dir / "history.json"
+        ckpt_path = run_dir / "checkpoint_final.pt"
+        if history_path.is_file() and ckpt_path.is_file():
+            # Load existing history to find how many epochs have been completed
+            with open(history_path, "r", encoding="utf-8") as f:
+                existing_history = json.load(f)
+            # Count completed epochs from history
+            if existing_history:
+                start_epoch = max(int(r["epoch"]) for r in existing_history)
+            resumed = True
+            global_epoch = start_epoch
+            # Determine if this is the 1st resume (no numbered backups exist yet)
+            # or a subsequent resume.
+            ckpt01 = run_dir / "checkpoint01.pt"
+            hist01 = run_dir / "history01.json"
+            is_first_resume = not (ckpt01.is_file() and hist01.is_file())
+            if is_first_resume:
+                # 1st resume: copy checkpoint and rename history, then load
+                import shutil
+                # Copy (not move) so original remains for model loading
+                shutil.copy2(str(ckpt_path), str(ckpt01))
+                # Rename history.json to history01.json
+                hist_backup = run_dir / "history01.json"
+                shutil.move(str(history_path), str(hist_backup))
+                # Load existing history from the backup
+                with open(str(hist_backup), "r", encoding="utf-8") as f:
+                    existing_history = json.load(f)
+                print(f"Resuming training from epoch {start_epoch} (1st resume)")
+                print(f"Checkpoint backed up to: {ckpt01}")
+            else:
+                # Subsequent resume: just load existing history from history.json
+                with open(str(history_path), "r", encoding="utf-8") as f:
+                    existing_history = json.load(f)
+                print(f"Resuming training from epoch {start_epoch} (subsequent resume)")
+            # Load model weights from the original checkpoint
+            model.load_state_dict(torch.load(str(ckpt_path), map_location=device))
+        else:
+            print("Resume requested but no previous state found; starting from scratch.")
+            existing_history = []
+    else:
+        existing_history = []
+
+    # Initialize history: use existing if resuming, otherwise empty list
+    if resumed:
+        history = existing_history
+    else:
+        history = []
+    global_epoch = start_epoch
+
+    # Recompute epochs_total after we know start_epoch
+    # So that only remaining epochs are trained
+    epochs_total = int(epochs if epochs is not None else cfg.epochs)
+    if start_epoch > 0:
+        epochs_total = max(0, epochs_total - start_epoch)
+    epochs_per_window = max(1, epochs_total // len(windows))
     replay_si = None
 
     # Historisation des points adaptatifs et de la perte locale.
@@ -622,6 +702,43 @@ def train(
 
     write_history_csv(history, run_dir)
     (run_dir/"history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
+
+    # Also save a snapshot as historyNN.json / checkpointNN.json with only the NEW epochs
+    # trained in this session - only when resuming, and with incremental numbering.
+    if resumed and start_epoch > 0 and len(history) > start_epoch:
+        new_history = history[start_epoch:]
+        # Assign new epoch numbers starting from start_epoch + 1
+        for i, entry in enumerate(new_history):
+            entry["epoch"] = start_epoch + i + 1
+        new_hist_json = json.dumps(new_history, indent=2)
+        # Use incremental numbering: find the next available number from existing
+        # numbered backups (checkpoint01.pt, history01.json, etc.)
+        import re
+        pattern_ckpt = re.compile(r"^checkpoint(\d+)\.pt$")
+        pattern_hist = re.compile(r"^history(\d+)\.json$")
+        nums_ckpt = []
+        nums_hist = []
+        for p in run_dir.iterdir():
+            m = pattern_ckpt.match(p.name)
+            if m:
+                nums_ckpt.append(int(m.group(1)))
+            m = pattern_hist.match(p.name)
+            if m:
+                nums_hist.append(int(m.group(1)))
+        next_idx = 1
+        if nums_ckpt or nums_hist:
+            next_idx = max(max(nums_ckpt, default=0), max(nums_hist, default=0)) + 1
+        new_ckpt_file = run_dir / f"checkpoint{next_idx:02d}.pt"
+        new_hist_file = run_dir / f"history{next_idx:02d}.json"
+        # Copy checkpoint_final.pt to the numbered backup
+        import shutil
+        shutil.copy2(str(run_dir / "checkpoint_final.pt"), str(new_ckpt_file))
+        # Write the new history snapshot
+        with open(str(new_hist_file), "w", encoding="utf-8") as f:
+            f.write(new_hist_json)
+    else:
+        # Not resuming: no numbered snapshots created
+        new_hist_json = json.dumps(history, indent=2)
 
     print(f"Training finished. Results saved to: {run_dir}")
 

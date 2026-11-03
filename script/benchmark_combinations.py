@@ -81,7 +81,9 @@ def run_inference_and_error(model, cfg, data_npz_path, device):
         "rmse_p": rmse_p,
         "rmse_alpha": rmse_alpha,
     }
-def main(epochs=50, seed=1234):
+
+
+def main(epochs=50, seed=1234, force=False, resume_training=False):
     results_dir = ROOT / "reports"
     models_dir = ROOT / "models"
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -131,11 +133,72 @@ def main(epochs=50, seed=1234):
         )
         cfg.model_name = model_name
 
+        # === Skip / resume logic ===
+        errors_npz = results_dir / f"errors_{model_name}.npz"
+        ckpt_pt = models_dir / model_name / "checkpoint_final.pt"
+        complete = errors_npz.is_file() and ckpt_pt.is_file()
+
+        if force:
+            print(f"  Force retraining {model_name} (removing existing files)...")
+            # Remove existing error file
+            if errors_npz.is_file():
+                errors_npz.unlink()
+            # Remove entire model directory and re-train from scratch
+            model_subdir = models_dir / model_name
+            if model_subdir.is_dir():
+                import shutil
+                shutil.rmtree(str(model_subdir))
+            # After forcing, model is no longer "complete"
+            complete = False
+            should_resume = False
+        elif resume_training and complete:
+            print(f"  Resuming training for {model_name} from checkpoint...")
+            should_resume = True
+        elif complete:
+            # Skip training - model already complete, just compute errors
+            print(f"  Skipping training for {model_name} (model already complete)")
+            should_resume = False
+            # Load existing errors and skip training
+            inf = np.load(errors_npz, allow_pickle=True)
+            train_time = 0.0
+            mean_rmse = {
+                "u": float(np.mean(inf["rmse_u"])),
+                "v": float(np.mean(inf["rmse_v"])),
+                "p": float(np.mean(inf["rmse_p"])),
+                "alpha": float(np.mean(inf["rmse_alpha"])),
+            }
+            summary.append({
+                "model_name": model_name,
+                "combination": f"ff{ff}_asamp{asamp}_ts{ts}_alw{alw}",
+                "use_fourier_features": ff,
+                "use_adaptive_sampling": asamp,
+                "use_temporal_segmentation": ts,
+                "use_adaptive_loss_weights": alw,
+                "train_time_s": train_time,
+                "mean_rmse_u": mean_rmse["u"],
+                "mean_rmse_v": mean_rmse["v"],
+                "mean_rmse_p": mean_rmse["p"],
+                "mean_rmse_alpha": mean_rmse["alpha"],
+            })
+            model_table.append({
+                "model_name": model_name,
+                "use_fourier_features": bool(ff),
+                "use_adaptive_sampling": bool(asamp),
+                "use_temporal_segmentation": bool(ts),
+                "use_adaptive_loss_weights": bool(alw),
+            })
+            # Skip training and continue to next iteration
+            continue
+        else:
+            # Normal check for complete/resume
+            should_resume = False
+
         t0 = time.perf_counter()
         model, history, run_dir = train(
             cfg,
             output_dir=str(models_dir),
             model_name=model_name,
+            resume=should_resume,
         )
         train_time = time.perf_counter() - t0
         print(f"  Training time: {train_time:.2f}s, final continuity loss: {history[-1].get('continuity', 'N/A'):.6e}")
@@ -229,7 +292,17 @@ if __name__ == "__main__":
         default=1234,
         help="Random seed (default: 1234).",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force retraining of all models from scratch, overwriting existing results.",
+    )
+    parser.add_argument(
+        "--resume-training",
+        action="store_true",
+        help="If model exists, resume training from its current state instead of skipping.",
+    )
     args = parser.parse_args()
     if args.epochs <= 0:
         parser.error("--epochs must be a positive integer.")
-    main(epochs=args.epochs, seed=args.seed)
+    main(epochs=args.epochs, seed=args.seed, force=args.force, resume_training=args.resume_training)
