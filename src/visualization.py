@@ -367,6 +367,7 @@ def animate_comparison(
     point_size=10,
     show_forces=True,
     display_animation=True,
+    t_max=None
 ):
     """
     Compare OpenFOAM and SINN fields side by side.
@@ -397,6 +398,9 @@ def animate_comparison(
         Display Fx curves if both datasets contain them.
     display_animation : bool, optional
         Display the animation in a Jupyter notebook.
+    t_max : float or None, optional
+        Maximum time to display. If None, uses the maximum time
+        from the OpenFOAM dataset.
 
     Returns
     -------
@@ -465,7 +469,7 @@ def animate_comparison(
         raise ValueError("Time vectors contain non-finite values.")
 
     # Keep OpenFOAM times within the SINN interval.
-    valid = (t_of >= t_sinn.min()) & (t_of <= t_sinn.max())
+    valid = (t_of >= t_sinn.min()) & (t_of <= t_sinn.max()) & (t_of <= t_max if t_max is not None else True)
     frame_indices = np.flatnonzero(valid)
 
     if len(frame_indices) == 0:
