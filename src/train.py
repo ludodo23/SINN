@@ -558,15 +558,6 @@ def train(
                         score_result["alpha"][selected_idx]
                         .detach().cpu().numpy().copy()
                     )
-                    # New adaptive history for walls and initial
-                    if window_id == 0 and 'cached_initial_si' in dir() and cached_initial_si is not None:
-                        adaptive_history_winit.append(global_epoch)
-                        adaptive_history_windows_winit.append(window_id)
-                        adaptive_points_winit.append(cached_initial_si.detach().cpu().numpy().copy())
-                        # Store scores will be handled separately
-                        score_result["alpha"][selected_idx]
-                        .detach().cpu().numpy().copy()
-                    )
 
             if cfg.use_adaptive_sampling and cached_interior_si is not None:
                 interior_si = cached_interior_si.clone()
@@ -606,10 +597,6 @@ def train(
                     sample_initial(cfg.n_initial, cfg, device=device)
                     if window_id == 0 else None
                 )
-                window_cfg,
-                device=device,
-                include_top=not bool(getattr(cfg, "top_is_open", True)),
-            )
 
             interior = nondimensionalize_points(interior_si, cfg)
             walls = nondimensionalize_points(walls_si, cfg)
@@ -726,6 +713,8 @@ def train(
             cfg,
         )
 
+    if cfg.use_lbfgs:
+
         frozen_weights = dict(weights)
 
         lbfgs = torch.optim.LBFGS(
@@ -761,22 +750,7 @@ def train(
             total.backward()
             return total
 
-        for _ in range(lbfgs_epochs_here):
-            model.train()
-            lbfgs.step(closure)
-            lc = continuity_loss(model, fixed_points, cfg)
-            lv = volume_fraction_loss(model, fixed_points, cfg)
-            lm = momentum_loss(model, fixed_points, cfg)
-
-            total = (
-                frozen_weights["continuity"] * lc
-                + frozen_weights["vof"] * lv
-                + frozen_weights["momentum"] * lm
-            )
-            total.backward()
-            return total
-
-        for _ in range(lbfgs_epochs_here):
+        for _ in range(cfg.lbfgs_epochs):
             model.train()
             lbfgs.step(closure)
 
