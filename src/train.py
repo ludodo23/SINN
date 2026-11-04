@@ -631,16 +631,6 @@ def train(
                 "pressure_gauge": lg,
             }
 
-            # Aggregated dictionary for history.csv / history.json backward compatibility
-            losses = {
-                "continuity": lc,
-                "vof": lv,
-                "momentum": lmx + lmy,
-                "initial": liu + liv + lia,
-                "wall": lwu + lwv,
-                "pressure_gauge": lg,
-            }
-
             # Poids fixes par défaut (mapping des nouveaux termes vers les vieux poids cfg)
             weights = {
                 "continuity": cfg.w_continuity,
@@ -675,7 +665,7 @@ def train(
                 "total": float(total.detach().cpu()),
                 **{
                     key: float(value.detach().cpu())
-                    for key, value in losses.items()
+                    for key, value in loss_terms.items()
                 },
             }
             history.append(row)
@@ -684,9 +674,10 @@ def train(
             pbar.update(1)
             pbar.set_postfix(
                 total=f"{float(total.detach().cpu()):.4e}",
-                continuity=f"{float(losses['continuity'].detach().cpu()):.4e}",
-                volume_fraction=f"{float(losses['vof'].detach().cpu()):.4e}",
-                momentum=f"{float(losses['momentum'].detach().cpu()):.4e}",
+                continuity=f"{float(loss_terms['continuity'].detach().cpu()):.4e}",
+                alpha=f"{float(loss_terms['vof'].detach().cpu()):.4e}",
+                u=f"{float(loss_terms['momentum_x'].detach().cpu()):.4e}",
+                v=f"{float(loss_terms['momentum_y'].detach().cpu()):.4e}",
                 lr=f"{adam.param_groups[0]['lr']:.2e}",
                 window=f"w{window_id}",
             )
