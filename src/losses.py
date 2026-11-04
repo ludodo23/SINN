@@ -277,7 +277,7 @@ def momentum_loss(model, points, cfg, return_per_point=False):
 
     if return_per_point:
         return (rx.square() + ry.square()).reshape(-1)
-    return mse(rx) + mse(ry)
+    return mse(rx), mse(ry)
 
 
 def initial_loss(model, points, cfg):
@@ -325,12 +325,10 @@ def initial_loss(model, points, cfg):
     )
 
     return (
-        mse(f["u"])
-        + mse(f["v"])
-        + mse(f["alpha"] - target_alpha)
+        mse(f["u"]),
+        mse(f["v"]),
+        mse(f["alpha"] - target_alpha)
     )
-
-
 def wall_loss(model, points, cfg):
     """Penalise violation of the no-slip condition on fixed walls.
 
@@ -360,7 +358,7 @@ def wall_loss(model, points, cfg):
         Non-dimensional wall loss.
     """
     f = model(points)
-    return mse(f["u"]) + mse(f["v"])
+    return mse(f["u"]), mse(f["v"])
 
 
 def pressure_gauge_loss(model, point, cfg):

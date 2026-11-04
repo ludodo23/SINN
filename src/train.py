@@ -333,9 +333,11 @@ def train(
           f"\tseed={int(cfg.seed)}")
 
     weight_names = (
-        "continuity", "vof", "momentum",
-        "initial", "wall", "pressure_gauge",
-    )
+            "continuity", "vof",
+            "momentum_x", "momentum_y",
+            "initial_u", "initial_v", "initial_alpha",
+            "wall_u", "wall_v",
+            )
     weight_balancer = GradNormWeights(
         weight_names,
         alpha=getattr(cfg, "gradnorm_alpha", 0.5),
@@ -438,6 +440,7 @@ def train(
 
         # Les poids du réseau et l'état d'Adam sont conservés.
         cached_interior_si = None
+        cached_walls_si = None
         fixed_lbfgs_points = None
 
         for local_epoch in range(epochs_per_window):
@@ -451,23 +454,80 @@ def train(
             ):
                 model.eval()
                 with torch.enable_grad():
+                    # Interior candidates
                     candidates_si = sample_interior(
                         cfg.n_candidate_points, window_cfg, device=device
                     )
                     candidates_nd = nondimensionalize_points(candidates_si, cfg)
                     score_result = score_candidates(model, candidates_nd, cfg)
 
-                scores = score_result["scores"]
-                selected_nd, selected_idx = sample_mixed_adaptive(
-                    candidates_nd,
-                    scores,
-                    cfg.n_collocation,
-                    adaptive_fraction=cfg.adaptive_fraction,
-                    return_indices=True,
-                )
-                cached_interior_si = dimensionalize_points(
-                    selected_nd, cfg
-                ).detach()
+                    scores = score_result["scores"]
+                    selected_nd, selected_idx = sample_mixed_adaptive(
+                        candidates_nd,
+                        scores,
+                        cfg.n_collocation,
+                        adaptive_fraction=cfg.adaptive_fraction,
+                        return_indices=True,
+                    )
+                    cached_interior_si = dimensionalize_points(
+                        selected_nd, cfg
+                    ).detach()
+
+                    # Wall candidates and adaptive selection
+                    candidates_walls_si = sample_walls(
+                        cfg.n_candidate_points,
+                        window_cfg,
+                        device=device,
+                        include_top=not bool(getattr(cfg, "top_is_open", True)),
+                    )
+                    candidates_walls_nd = nondimensionalize_points(candidates_walls_si, cfg)
+                    # Score walls by u^2 + v^2 (no-slip violation)
+                    with torch.no_grad():
+                        wall_pred = model(candidates_walls_nd)
+                        wall_score = wall_pred["u"].pow(2) + wall_pred["v"].pow(2)
+                    # Flatten for scoring
+                    wall_scores_flat = wall_score.reshape(-1)
+                    selected_walls_nd, wall_selected_idx = sample_mixed_adaptive(
+                        candidates_walls_nd,
+                        wall_scores_flat,
+                        cfg.n_wall,
+                        adaptive_fraction=cfg.adaptive_fraction,
+                        return_indices=True,
+                    )
+                    cached_walls_si = dimensionalize_points(
+                        selected_walls_nd, cfg
+                    ).detach()
+
+                    # Initial candidates (window 0 only)
+                    if window_id == 0:
+                        candidates_init_si = sample_initial(
+                            cfg.n_candidate_points, window_cfg, device=device
+                        )
+                        candidates_init_nd = nondimensionalize_points(candidates_init_si, cfg)
+                        with torch.no_grad():
+                            init_pred = model(candidates_init_nd)
+                            # Score by u^2 + v^2 + (alpha - alpha_0)^2
+                            target_alpha = torch.sigmoid(
+                                (cfg.initial_level / cfg.length_ref
+                                - candidates_init_nd[:, 1:2])
+                                / (cfg.interface_smoothing / cfg.length_ref)
+                            )
+                            init_score = (
+                                init_pred["u"].pow(2)
+                                + init_pred["v"].pow(2)
+                                + (init_pred["alpha"] - target_alpha).pow(2)
+                            ).reshape(-1)
+                        selected_init_nd, init_selected_idx = sample_mixed_adaptive(
+                            candidates_init_nd,
+                            init_score,
+                            cfg.n_initial,
+                            adaptive_fraction=cfg.adaptive_fraction,
+                            return_indices=True,
+                        )
+                        cached_initial_si = dimensionalize_points(
+                            selected_init_nd, cfg
+                        ).detach()
+
                 model.train()
 
                 # Historisation des points adaptatifs et de la perte locale.
@@ -498,6 +558,15 @@ def train(
                         score_result["alpha"][selected_idx]
                         .detach().cpu().numpy().copy()
                     )
+                    # New adaptive history for walls and initial
+                    if window_id == 0 and 'cached_initial_si' in dir() and cached_initial_si is not None:
+                        adaptive_history_winit.append(global_epoch)
+                        adaptive_history_windows_winit.append(window_id)
+                        adaptive_points_winit.append(cached_initial_si.detach().cpu().numpy().copy())
+                        # Store scores will be handled separately
+                        score_result["alpha"][selected_idx]
+                        .detach().cpu().numpy().copy()
+                    )
 
             if cfg.use_adaptive_sampling and cached_interior_si is not None:
                 interior_si = cached_interior_si.clone()
@@ -520,12 +589,23 @@ def train(
                     [interior_si, replay_batch], dim=0
                 )
 
-            initial_si = (
-                sample_initial(cfg.n_initial, cfg, device=device)
-                if window_id == 0 else None
-            )
-            walls_si = sample_walls(
-                cfg.n_wall,
+            if cfg.use_adaptive_sampling and cached_walls_si is not None:
+                walls_si = cached_walls_si.clone()
+            else:
+                walls_si = sample_walls(
+                    cfg.n_wall,
+                    window_cfg,
+                    device=device,
+                    include_top=not bool(getattr(cfg, "top_is_open", True)),
+                )
+
+            if window_id == 0 and cfg.use_adaptive_sampling and cached_initial_si is not None:
+                initial_si = cached_initial_si.clone()
+            else:
+                initial_si = (
+                    sample_initial(cfg.n_initial, cfg, device=device)
+                    if window_id == 0 else None
+                )
                 window_cfg,
                 device=device,
                 include_top=not bool(getattr(cfg, "top_is_open", True)),
@@ -534,35 +614,57 @@ def train(
             interior = nondimensionalize_points(interior_si, cfg)
             walls = nondimensionalize_points(walls_si, cfg)
 
+
             lc = continuity_loss(model, interior, cfg)
             lv = volume_fraction_loss(model, interior, cfg)
-            lm = momentum_loss(model, interior, cfg)
-            lw = wall_loss(model, walls, cfg)
+            lmx, lmy = momentum_loss(model, interior, cfg)
+            lwu, lwv = wall_loss(model, walls, cfg)
 
             if initial_si is not None:
                 initial = nondimensionalize_points(initial_si, cfg)
-                li = initial_loss(model, initial, cfg)
+                liu, liv, lia = initial_loss(model, initial, cfg)
             else:
-                li = lc.new_zeros(())
+                liu = lc.new_zeros(())
+                liv = lc.new_zeros(())
+                lia = lc.new_zeros(())
 
             lg = pressure_gauge_loss(model, gauge, cfg)
 
-            losses = {
+            # Split-term dictionary for GradNorm and weighted sum
+            loss_terms = {
                 "continuity": lc,
                 "vof": lv,
-                "momentum": lm,
-                "initial": li,
-                "wall": lw,
+                "momentum_x": lmx,
+                "momentum_y": lmy,
+                "initial_u": liu,
+                "initial_v": liv,
+                "initial_alpha": lia,
+                "wall_u": lwu,
+                "wall_v": lwv,
                 "pressure_gauge": lg,
             }
 
-            # Poids fixes par défaut.
+            # Aggregated dictionary for history.csv / history.json backward compatibility
+            losses = {
+                "continuity": lc,
+                "vof": lv,
+                "momentum": lmx + lmy,
+                "initial": liu + liv + lia,
+                "wall": lwu + lwv,
+                "pressure_gauge": lg,
+            }
+
+            # Poids fixes par défaut (mapping des nouveaux termes vers les vieux poids cfg)
             weights = {
                 "continuity": cfg.w_continuity,
                 "vof": cfg.w_vof,
-                "momentum": cfg.w_momentum,
-                "initial": cfg.w_initial,
-                "wall": cfg.w_wall,
+                "momentum_x": cfg.w_momentum,
+                "momentum_y": cfg.w_momentum,
+                "initial_u": cfg.w_initial,
+                "initial_v": cfg.w_initial,
+                "initial_alpha": cfg.w_initial,
+                "wall_u": cfg.w_wall,
+                "wall_v": cfg.w_wall,
                 "pressure_gauge": cfg.w_pressure_gauge,
             }
 
@@ -570,9 +672,9 @@ def train(
             if cfg.use_adaptive_loss_weights and (
                 local_epoch % cfg.weight_update_interval == 0
             ):
-                weights.update(weight_balancer.update(losses, model))
+                weights.update(weight_balancer.update(loss_terms, model))
 
-            total = sum(weights[k] * losses[k] for k in losses)
+            total = sum(weights[k] * loss_terms[k] for k in loss_terms)
 
             adam.zero_grad(set_to_none=True)
             total.backward()
@@ -610,14 +712,17 @@ def train(
         ).detach()
 
     
-    if cfg.use_lbfgs:
-        print("Starting L-BFGS optimization...", flush=True)
-        # Use lbfgs_epochs parameter if provided, otherwise fall back to cfg
-        lbfgs_epochs_here = lbfgs_epochs if lbfgs_epochs is not None else cfg.lbfgs_epochs
-        # Ces points et les poids des pertes doivent rester fixes
-        # pendant toutes les évaluations de la closure.
-        fixed_points = nondimensionalize_points(
+        # Fixed points for L-BFGS: interior + walls + initial
+        fixed_interior = nondimensionalize_points(
             sample_interior(cfg.n_collocation, cfg, device=device),
+            cfg,
+        )
+        fixed_walls = nondimensionalize_points(
+            sample_walls(cfg.n_wall, cfg, device=device, include_top=False),
+            cfg,
+        )
+        fixed_initial = nondimensionalize_points(
+            sample_initial(cfg.n_initial, cfg, device=device),
             cfg,
         )
 
@@ -634,6 +739,31 @@ def train(
         def closure():
             lbfgs.zero_grad(set_to_none=True)
 
+            lc = continuity_loss(model, fixed_interior, cfg)
+            lv = volume_fraction_loss(model, fixed_interior, cfg)
+            lmx, lmy = momentum_loss(model, fixed_interior, cfg)
+            lwu, lwv = wall_loss(model, fixed_walls, cfg)
+            liu, liv, lia = initial_loss(model, fixed_initial, cfg)
+            lg = pressure_gauge_loss(model, gauge, cfg)
+
+            total = (
+                frozen_weights["continuity"] * lc
+                + frozen_weights["vof"] * lv
+                + frozen_weights["momentum_x"] * lmx
+                + frozen_weights["momentum_y"] * lmy
+                + frozen_weights["initial_u"] * liu
+                + frozen_weights["initial_v"] * liv
+                + frozen_weights["initial_alpha"] * lia
+                + frozen_weights["wall_u"] * lwu
+                + frozen_weights["wall_v"] * lwv
+                + frozen_weights["pressure_gauge"] * lg
+            )
+            total.backward()
+            return total
+
+        for _ in range(lbfgs_epochs_here):
+            model.train()
+            lbfgs.step(closure)
             lc = continuity_loss(model, fixed_points, cfg)
             lv = volume_fraction_loss(model, fixed_points, cfg)
             lm = momentum_loss(model, fixed_points, cfg)
