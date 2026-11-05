@@ -11,7 +11,24 @@ from IPython.display import HTML, display
 from model import SloshingPINN
 
 
-def plot_history(path="outputs/loss_history.json", use_same_figure=True):
+def plot_history(
+        path="outputs/loss_history.json",
+        use_same_figure=True,
+        loss_names=[
+            "continuity",
+            "vof",
+            "momentum_x",
+            "momentum_y",
+            "initial_u",
+            "initial_v",
+            "initial_alpha",
+            "wall_u",
+            "wall_v",
+            "pressure_gauge"],
+        title=None,
+        ax=None,
+        label=None,
+        legend=True):
     """Plot training loss history.
 
     Parameters
@@ -22,20 +39,27 @@ def plot_history(path="outputs/loss_history.json", use_same_figure=True):
     use_same_figure : bool, optional
         If True, plot all losses in a single figure. If False, create
         a separate figure for each loss. Default is True.
+
     """
     with open(path, encoding="utf-8") as file:
         history = json.load(file)
 
     epochs = [row["epoch"] for row in history]
 
-    loss_names = [
-        key for key in history[0]
-        if key != "epoch"
-    ]
+    if ax is None:
+        if use_same_figure:
+            fig_, ax_ = plt.subplots()
+            fig, ax = fig_, ax_
+        else:
+            fig, ax = [], []
+    else:
+        ax_ = ax
+        use_same_figure = True
+        fig = plt.gcf()
+        fig_ = fig
 
-    if use_same_figure:
-        fig, ax = plt.subplots()
-
+    if title is None:
+        title = "Loss history"
 
     for name in loss_names:
         values = [
@@ -44,19 +68,49 @@ def plot_history(path="outputs/loss_history.json", use_same_figure=True):
         ]
 
         if not use_same_figure:
-            ax, fig = plt.subplots()
-            ax.set_ylabel(name)
-        else:
-            ax.set_ylabel("Loss (log scale)")
+            fig_, ax_ = plt.subplots()
+            ax_.set_title(f"{title}: {name}")
 
-        ax.semilogy(epochs, values, label=name)
-        ax.set_xlabel("Epoch")
-        ax.set_title(f"Loss history: {name}")
-        ax.grid(True)
-        fig.tight_layout()
+        ax_.semilogy(epochs, values, label=label if label is not None else name)
+        ax_.set_xlabel("Epoch")
+        ax_.set_ylabel("Loss (log scale)")
+        ax_.grid(True)
+        fig_.tight_layout()
+        if not use_same_figure:
+            fig.append(fig_)
+            ax.append(ax_)
     if use_same_figure:
-        ax.legend()
-    plt.show()
+        if legend:
+            fig_.legend(loc=7)
+            fig.tight_layout()
+            fig.subplots_adjust(right=0.75)
+        ax_.set_title(title)
+
+    return fig, ax
+
+
+def plot_histories(paths=[], names=None):
+    """_summary_
+
+    Args:
+        paths (list, optional): _description_. Defaults to [].
+    """
+    fig, ax = plt.subplots(figsize=(12, 6))
+    if names is None:
+        names = [p.parent.name for p in paths]
+    for p, n in zip(paths, names):
+        plot_history(
+            path=p,
+            loss_names=["total"],
+            label=n,
+            ax=ax,
+            legend=False
+        )
+    fig.legend(loc=7)
+    fig.subplots_adjust(right=0.75)
+    fig.tight_layout()
+    ax.set_title("Loss comparison")
+    return fig, ax
 
 
 def load_model(
