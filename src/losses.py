@@ -27,7 +27,7 @@ def mse(value):
     return torch.mean(value**2)
 
 
-def continuity_loss(model, points, cfg, return_per_point=False):
+def continuity_loss(model, points, cfg, return_per_point=False, return_raw=False):
     """Penalise mass conservation violation for 2D incompressible flow.
 
     Non-dimensional equation::
@@ -52,11 +52,19 @@ def continuity_loss(model, points, cfg, return_per_point=False):
         Collocation points, shape ``(N, 3)`` with columns ``(x*, y*, t*)``.
     cfg : object
         Problem configuration.
+    return_per_point : bool, optional
+        If True, returns the residuals per point (before squaring).
+        Default is False.
+    return_raw : bool, optional
+        If True, returns the residuals themselves (not squared, not MSE).
+        Default is False.
 
     Returns
     -------
-    torch.Tensor
-        Non-dimensional continuity loss.
+    torch.Tensor or tuple of torch.Tensor
+        If return_per_point=True and return_raw=False: squared residuals per point, shape (N,).
+        If return_per_point=False and return_raw=False: scalar MSE loss.
+        If return_raw=True: the residual tensor(s) themselves (before squaring/MSE).
     """
     c = points.detach().clone().requires_grad_(True)
     f = model(c)
@@ -67,10 +75,13 @@ def continuity_loss(model, points, cfg, return_per_point=False):
     # Divergence of the non-dimensional velocity field.
     residual = du[:, 0:1] + dv[:, 1:2]
 
+    if return_raw:
+        return residual
+
     return residual.square().reshape(-1) if return_per_point else mse(residual)
 
 
-def volume_fraction_loss(model, points, cfg=None, return_per_point=False):
+def volume_fraction_loss(model, points, cfg=None, return_per_point=False, return_raw=False):
     """Conservative volume fraction transport:
 
         d(alpha)/dt* + div*(alpha u*) = 0
@@ -83,11 +94,19 @@ def volume_fraction_loss(model, points, cfg=None, return_per_point=False):
         Points, shape ``(N, 3)`` with columns ``(x*, y*, t*)``.
     cfg : object, optional
         Problem configuration (unused in the residual itself).
+    return_per_point : bool, optional
+        If True, returns the residuals per point (before squaring).
+        Default is False.
+    return_raw : bool, optional
+        If True, returns the residuals themselves (not squared, not MSE).
+        Default is False.
 
     Returns
     -------
-    torch.Tensor
-        Non-dimensional volume fraction loss.
+    torch.Tensor or tuple of torch.Tensor
+        If return_per_point=True and return_raw=False: squared residuals per point, shape (N,).
+        If return_per_point=False and return_raw=False: scalar MSE loss.
+        If return_raw=True: the residual tensor (before squaring/MSE).
     """
     c = points.detach().clone().requires_grad_(True)
     f = model(c)
@@ -106,10 +125,13 @@ def volume_fraction_loss(model, points, cfg=None, return_per_point=False):
         + grad_alpha_v[:, 1:2]
     )
 
+    if return_raw:
+        return residual
+
     return residual.square().reshape(-1) if return_per_point else mse(residual)
 
 
-def momentum_loss(model, points, cfg, return_per_point=False):
+def momentum_loss(model, points, cfg, return_per_point=False, return_raw=False):
     """Penalise violation of non-dimensional momentum equations
     for laminar water–air flow.
 
@@ -176,11 +198,19 @@ def momentum_loss(model, points, cfg, return_per_point=False):
     cfg : object
         Configuration containing Re, Fr, We, rho_ref, mu_ref,
         gravity_ref and mixture physical properties.
+    return_per_point : bool, optional
+        If True, returns the sum of squared residuals per point.
+        Default is False.
+    return_raw : bool, optional
+        If True, returns the raw residuals (rx, ry) before squaring/MSE.
+        Default is False.
 
     Returns
     -------
-    torch.Tensor
-        Non-dimensional momentum loss.
+    torch.Tensor or tuple of torch.Tensor
+        If return_per_point=True and return_raw=False: sum of squared residuals per point, shape (N,).
+        If return_per_point=False and return_raw=False: tuple of scalar MSE losses (mse(rx), mse(ry)).
+        If return_raw=True: tuple of residual tensors (rx, ry) before squaring/MSE.
     """
     c = points.detach().clone().requires_grad_(True)
     f = model(c)
@@ -274,6 +304,9 @@ def momentum_loss(model, points, cfg, return_per_point=False):
         - rho_star * b_y_star / cfg.Fr**2
         - curvature * alpha_y / cfg.We
     )
+
+    if return_raw:
+        return rx, ry
 
     if return_per_point:
         return (rx.square() + ry.square()).reshape(-1)

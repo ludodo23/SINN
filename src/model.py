@@ -12,6 +12,7 @@ from torch import nn
 import math
 
 from config import Config
+from losses import continuity_loss, volume_fraction_loss, momentum_loss
 
 
 class FourierFeatures(nn.Module):
@@ -216,6 +217,67 @@ class SloshingPINN(nn.Module):
         f = self.forward(coords_si / scales)
         return {"u": U*f["u"], "v": U*f["v"], "p": rho*U**2*f["p"],
                 "alpha": f["alpha"]}
+
+    def compute_residuals(self, points: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Compute physical residuals at given collocation points.
+
+        Parameters
+        ----------
+        points : torch.Tensor
+            Non-dimensional collocation points, shape ``(N, 3)`` with columns
+            ``(x*, y*, t*)``.
+
+        Returns
+        -------
+        dict of str to torch.Tensor
+            Dictionary with keys :
+            - ``"continuity"`` : continuity residual per point, shape ``(N,)``.
+            - ``"vof"`` : volume-fraction residual per point, shape ``(N,)``.
+            - ``"momentum_x"`` : x-momentum residual per point, shape ``(N,)``.
+            - ``"momentum_y"`` : y-momentum residual per point, shape ``(N,)``.
+
+        Notes
+        -----
+        The model's configuration (``self.cfg``) is used to compute the
+        non-dimensional residuals.  All residuals are **signed** (not squared),
+        so they can be inspected for positive/negative bias.
+        The call internally enables gradients (``torch.enable_grad``) so that
+        it works whether the model is in ``eval()`` or ``train()`` mode,
+        and regardless of the surrounding ``torch.no_grad()`` context.
+        """
+        if self.cfg is None:
+            raise ValueError(
+                "compute_residuals requires the Config used to build the model. "
+                "Provide it during model construction (state_path/config)."
+            )
+
+        # Ensure points have the expected shape (N, 3).
+        if points.ndim != 2 or points.shape[1] != 3:
+            raise ValueError(
+                f"points must have shape (N, 3) with columns (x*, y*, t*), "
+                f"got {points.shape}."
+            )
+
+        c = points.detach().clone().requires_grad_(True)
+
+        # Force gradient computation even if outside a no_grad context.
+        with torch.enable_grad():
+            # --- continuity residual ---
+            r_cont = continuity_loss(self, c, self.cfg, return_raw=True)  # (N, 1)
+
+            # --- volume-fraction residual ---
+            r_vof = volume_fraction_loss(self, c, self.cfg, return_raw=True)  # (N, 1)
+
+            # --- momentum residuals ---
+            rx, ry = momentum_loss(self, c, self.cfg, return_raw=True)  # each (N, 1)
+
+        # Squeeze the last dimension for a clean (N,) return.
+        return {
+            "continuity":  r_cont.squeeze(-1),  # (N,)
+            "vof":         r_vof.squeeze(-1),   # (N,)
+            "momentum_x":  rx.squeeze(-1),      # (N,)
+            "momentum_y":  ry.squeeze(-1),      # (N,)
+        }
 
 
 # ============================================================
