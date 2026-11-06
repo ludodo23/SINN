@@ -433,6 +433,10 @@ def train(
     gauge = nondimensionalize_points(gauge_si, cfg)
 
     for window_id, (t_left, t_right) in enumerate(windows):
+        # Reset GradNorm baselines at the start of each new temporal window (except the first)
+        if cfg.use_adaptive_loss_weights and window_id > 0:
+            weight_balancer.reset_baselines()
+
         window_cfg = replace(cfg, t_min=t_left, t_max=t_right)
 
         # Progress bar for total epochs
