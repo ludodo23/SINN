@@ -404,6 +404,9 @@ def train(
         history = existing_history
     else:
         history = []
+
+    adaptive_weight_history = []
+
     global_epoch = start_epoch
 
     # Recompute epochs_total after we know start_epoch
@@ -669,6 +672,16 @@ def train(
                 weights.update(adaptive_weights)
 
 
+            adaptive_weight_history.append({
+                "epoch": global_epoch,
+                "window": window_id,
+                **{
+                    name: float(weights[name])
+                    for name in weight_names
+                },
+            })
+
+
             total = sum(weights[k] * loss_terms[k] for k in loss_terms)
 
             adam.zero_grad(set_to_none=True)
@@ -852,6 +865,36 @@ def train(
     else:
         # Not resuming: no numbered snapshots created
         new_hist_json = json.dumps(history, indent=2)
+
+    if adaptive_weight_history:
+        with open(
+            run_dir / "adaptive_weights.json",
+            "w",
+            encoding="utf-8",
+        ) as f:
+            json.dump(
+                adaptive_weight_history,
+                f,
+                indent=2,
+            )
+        
+        final_adaptive_weights = {
+            name: float(weights[name])
+            for name in weight_names
+        }
+
+        with open(
+            run_dir / "adaptive_weights_final.json",
+            "w",
+            encoding="utf-8",
+        ) as f:
+            json.dump(
+                final_adaptive_weights,
+                f,
+                indent=2,
+            )
+
+
 
     print(f"Training finished. Results saved to: {run_dir}")
 
