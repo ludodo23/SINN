@@ -332,12 +332,16 @@ def train(
           f"\tdevice={device}\n"
           f"\tseed={int(cfg.seed)}")
 
+    
     weight_names = (
-            "continuity", "vof",
-            "momentum_x", "momentum_y",
-            "initial_u", "initial_v", "initial_alpha",
-            "wall_u", "wall_v",
-            )
+        "continuity",
+        "vof",
+        "momentum_x",
+        "momentum_y",
+        "wall_u",
+        "wall_v",
+    )
+
     weight_balancer = GradNormWeights(
         weight_names,
         alpha=getattr(cfg, "gradnorm_alpha", 0.5),
