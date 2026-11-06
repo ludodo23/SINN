@@ -192,3 +192,58 @@ class GradNormWeights:
             name: self._weights[name].detach().clone()
             for name in self.names
         }
+
+    def state_dict(self):
+        """Return the adaptive weighting state."""
+        return {
+            "weights": (
+                None
+                if self._weights is None
+                else {
+                    name: self._weights[name].detach().cpu()
+                    for name in self.names
+                }
+            ),
+            "initial_losses": (
+                None
+                if self.initial_losses is None
+                else {
+                    name: value.detach().cpu()
+                    for name, value in self.initial_losses.items()
+                }
+            ),
+            "optimizer": (
+                None
+                if self._optimizer is None
+                else self._optimizer.state_dict()
+            ),
+        }
+
+    
+    def load_state_dict(self, state, device):
+        """Restore the adaptive weighting state."""
+        if state["weights"] is None:
+            return
+
+        ref = next(iter(state["weights"].values()))
+
+        self._init_weights(device, ref.dtype)
+
+        with torch.no_grad():
+            for name in self.names:
+                self._weights[name].copy_(
+                    state["weights"][name].to(device)
+                )
+
+        if state["initial_losses"] is not None:
+            self.initial_losses = {
+                name: value.to(device)
+                for name, value in state["initial_losses"].items()
+            }
+
+        if state["optimizer"] is not None:
+            self._optimizer.load_state_dict(
+                state["optimizer"]
+            )
+
+
