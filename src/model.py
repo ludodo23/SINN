@@ -177,6 +177,68 @@ class SloshingPINN(nn.Module):
         return {"u": raw[:, 0:1], "v": raw[:, 1:2], "p": raw[:, 2:3],
                 "alpha": torch.sigmoid(raw[:, 3:4])}
 
+    def coords_star_to_si(self, coords_star: torch.Tensor) -> torch.Tensor:
+        """Convert non-dimensional coordinates to SI units.
+
+        Parameters
+        ----------
+        coords_star : torch.Tensor
+            Non-dimensional coordinates, shape ``(N, 3)`` with columns
+            ``(x*, y*, t*)``.
+
+        Returns
+        -------
+        torch.Tensor
+            SI coordinates, shape ``(N, 3)`` with columns ``(x, y, t)``.
+
+        Raises
+        ------
+        ValueError
+            If the model was built without a configuration.
+        """
+        if self.cfg is None:
+            raise ValueError("coords_star_to_si requires the Config used to build the model.")
+        if isinstance(self.cfg, dict):
+            L = float(self.cfg.get("length_ref"))
+            U = float(self.cfg.get("velocity_ref"))
+        else:
+            L = float(getattr(self.cfg, "length_ref"))
+            U = float(getattr(self.cfg, "velocity_ref"))
+        T = L / U
+        scales = coords_star.new_tensor([L, L, T])
+        return coords_star * scales
+
+    def coords_si_to_star(self, coords_si: torch.Tensor) -> torch.Tensor:
+        """Convert SI coordinates to non-dimensional.
+
+        Parameters
+        ----------
+        coords_si : torch.Tensor
+            SI coordinates, shape ``(N, 3)`` with columns ``(x, y, t)``.
+
+        Returns
+        -------
+        torch.Tensor
+            Non-dimensional coordinates, shape ``(N, 3)`` with columns
+            ``(x*, y*, t*)``.
+
+        Raises
+        ------
+        ValueError
+            If the model was built without a configuration.
+        """
+        if self.cfg is None:
+            raise ValueError("coords_si_to_star requires the Config used to build the model.")
+        if isinstance(self.cfg, dict):
+            L = float(self.cfg.get("length_ref"))
+            U = float(self.cfg.get("velocity_ref"))
+        else:
+            L = float(getattr(self.cfg, "length_ref"))
+            U = float(getattr(self.cfg, "velocity_ref"))
+        T = L / U
+        scales = coords_si.new_tensor([L, L, T])
+        return coords_si / scales
+
     def predict_physical(self, coords_si: torch.Tensor) -> dict[str, torch.Tensor]:
         """Predict physical quantities from SI coordinates.
 
@@ -218,14 +280,13 @@ class SloshingPINN(nn.Module):
         return {"u": U*f["u"], "v": U*f["v"], "p": rho*U**2*f["p"],
                 "alpha": f["alpha"]}
 
-    def compute_residuals(self, points: torch.Tensor) -> dict[str, torch.Tensor]:
+    def compute_residuals(self, coords_si: torch.Tensor) -> dict[str, torch.Tensor]:
         """Compute physical residuals at given collocation points.
 
         Parameters
         ----------
-        points : torch.Tensor
-            Non-dimensional collocation points, shape ``(N, 3)`` with columns
-            ``(x*, y*, t*)``.
+        coords_si : torch.Tensor
+            SI coordinates, shape ``(N, 3)`` with columns ``(x, y, t)``.
 
         Returns
         -------
@@ -251,14 +312,16 @@ class SloshingPINN(nn.Module):
                 "Provide it during model construction (state_path/config)."
             )
 
-        # Ensure points have the expected shape (N, 3).
-        if points.ndim != 2 or points.shape[1] != 3:
+        # Ensure coordinates have the expected shape (N, 3).
+        if coords_si.ndim != 2 or coords_si.shape[1] != 3:
             raise ValueError(
-                f"points must have shape (N, 3) with columns (x*, y*, t*), "
-                f"got {points.shape}."
+                f"coords_si must have shape (N, 3) with columns (x, y, t), "
+                f"got {coords_si.shape}."
             )
 
-        c = points.detach().clone().requires_grad_(True)
+        coords_star = self.coords_si_to_star(coords_si)
+
+        c = coords_star.detach().clone().requires_grad_(True)
 
         # Force gradient computation even if outside a no_grad context.
         with torch.enable_grad():

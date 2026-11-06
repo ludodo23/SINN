@@ -159,7 +159,7 @@ def load_model(
             model.cfg = saved["config"]
 
     model.eval()
-    return model, device, model.cfg
+    return model
 
 
 @torch.no_grad()
@@ -696,3 +696,524 @@ def animate_comparison(
         display(HTML(animation.to_jshtml()))
 
     return animation, fig
+
+
+import numpy as np
+import torch
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+from matplotlib.colors import LogNorm
+
+
+# =====================================================================
+# Shared domain resolution
+# =====================================================================
+def _resolve_domain(model, x, y, nx, ny):
+    """Build / auto-detect the (x, y) domain shared by plot_* and animate_*.
+
+    Returns a dict with keys:
+        structured, Xg, Yg, x_flat, y_flat, nx, ny, ix, iy
+    """
+    cfg = model.cfg
+    if cfg is None:
+        raise ValueError("The model has no configuration (model.cfg is None).")
+
+    # ---------- Build a mesh from config bounds ----------
+    if x is None or y is None:
+        try:
+            x_min, x_max = float(cfg.x_min), float(cfg.x_max)
+            y_min, y_max = float(cfg.y_min), float(cfg.y_max)
+        except AttributeError as e:
+            raise ValueError(
+                "x and y are None, but cfg is missing one of "
+                "x_min/x_max/y_min/y_max."
+            ) from e
+        ex, ey = x_max - x_min, y_max - y_min
+        if ex <= 0 or ey <= 0:
+            raise ValueError(f"Invalid domain bounds: ex={ex}, ey={ey}.")
+        base = 256
+        if nx is None and ny is None:
+            if ex >= ey:
+                nx, ny = base, max(64, int(round(base * ey / ex)))
+            else:
+                ny, nx = base, max(64, int(round(base * ex / ey)))
+        elif nx is None:
+            nx = max(64, int(round(ny * ex / ey)))
+        elif ny is None:
+            ny = max(64, int(round(nx * ey / ex)))
+        xg = np.linspace(x_min, x_max, nx, dtype=np.float32)
+        yg = np.linspace(y_min, y_max, ny, dtype=np.float32)
+        Xg, Yg = np.meshgrid(xg, yg)
+        x_flat, y_flat = Xg.ravel(), Yg.ravel()
+        return dict(
+            structured=True, Xg=Xg, Yg=Yg,
+            x_flat=x_flat, y_flat=y_flat, nx=nx, ny=ny,
+            ix=np.searchsorted(xg, x_flat),
+            iy=np.searchsorted(yg, y_flat),
+        )
+
+    # ---------- User-provided points ----------
+    x = np.asarray(x, dtype=np.float32).ravel()
+    y = np.asarray(y, dtype=np.float32).ravel()
+    if len(x) != len(y):
+        raise ValueError("x and y must have the same number of points.")
+    n_pts = len(x)
+
+    if nx is not None and ny is not None:
+        if nx * ny != n_pts:
+            raise ValueError(f"Points ({n_pts}) != nx*ny={nx*ny}.")
+        ux, uy = np.unique(x), np.unique(y)
+        if len(ux) != nx or len(uy) != ny:
+            raise ValueError(
+                f"Unique x ({len(ux)}) or y ({len(uy)}) does not match nx/ny."
+            )
+        Xg, Yg = np.meshgrid(ux, uy)
+        return dict(
+            structured=True, Xg=Xg, Yg=Yg,
+            x_flat=x, y_flat=y, nx=nx, ny=ny,
+            ix=np.searchsorted(ux, x),
+            iy=np.searchsorted(uy, y),
+        )
+
+    ux_c, uy_c = np.unique(x), np.unique(y)
+    if len(ux_c) * len(uy_c) == n_pts:
+        ix_c = np.searchsorted(ux_c, x)
+        iy_c = np.searchsorted(uy_c, y)
+        if len(np.unique(ix_c * len(uy_c) + iy_c)) == n_pts:
+            nx, ny = len(ux_c), len(uy_c)
+            Xg, Yg = np.meshgrid(ux_c, uy_c)
+            return dict(
+                structured=True, Xg=Xg, Yg=Yg,
+                x_flat=x, y_flat=y, nx=nx, ny=ny, ix=ix_c, iy=iy_c,
+            )
+
+    return dict(
+        structured=False, Xg=None, Yg=None,
+        x_flat=x, y_flat=y, nx=None, ny=None, ix=None, iy=None,
+    )
+
+
+def _forward_vof(model, coords):
+    """Best-effort extraction of the VOF field from ``model(coords)``."""
+    try:
+        out = model(coords)
+        if isinstance(out, dict):
+            return next(
+                (out[key] for key in ("alpha", "vof", "a") if key in out),
+                None,
+            )
+        if isinstance(out, (tuple, list)) and len(out) > 0:
+            return out[-1]
+        return out
+    except Exception:
+        return None
+
+
+# =====================================================================
+# Static plot
+# =====================================================================
+@torch.no_grad()
+def plot_residuals(
+    model,
+    x=None,
+    y=None,
+    t: float = 0.0,
+    fields=("continuity", "vof", "momentum_x", "momentum_y"),
+    nx=None,
+    ny=None,
+    cmap="viridis",
+    abs_value=True,
+    log=False,
+    overlay_vof=True,
+    figsize=None,
+):
+    """Plot physical residuals of a PINN as 2D contour maps in (x, y).
+
+    Domain handling
+    ---------------
+    * If ``x`` and ``y`` are ``None``, a regular Cartesian mesh is built
+      from ``model.cfg.x_min/x_max/y_min/y_max`` (resolution ``nx × ny``,
+      auto-chosen to respect the aspect ratio unless given).
+    * Otherwise the provided points are used, and the plotting mode is
+      auto-detected: ``contourf`` on a Cartesian grid, ``tricontourf``
+      on an unstructured cloud. No 1D / scatter fallback.
+
+    Parameters
+    ----------
+    model : SloshingPINN
+    x, y : np.ndarray, optional
+        Domain points in SI units. If both ``None``, built from cfg bounds.
+    t : float
+        Time in seconds.
+    fields : tuple of str
+        Subset of ``("continuity", "vof", "momentum_x", "momentum_y")``.
+    nx, ny : int, optional
+        Grid resolution (see module docstring).
+    cmap : str
+        Colormap. Default ``"viridis"``.
+    abs_value : bool
+        Plot ``|residual|``. Default ``True``.
+    log : bool
+        Log-scale the magnitude (implies ``|residual|``).
+    overlay_vof : bool
+        Overlay the ``α = 0.5`` iso-contour of the predicted VOF field.
+    figsize : tuple, optional
+        Default ``(8, 4.5 * n_fields)``.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    """
+    cfg = model.cfg
+    if cfg is None:
+        raise ValueError("The model has no configuration (model.cfg is None).")
+
+    if isinstance(fields, str):
+        fields = (fields,)
+    valid = {"continuity", "vof", "momentum_x", "momentum_y"}
+    for f in fields:
+        if f not in valid:
+            raise ValueError(f"Invalid field '{f}'. Must be one of {valid}.")
+
+    device = next(model.parameters()).device
+    t_val = float(t)
+
+    # ---------- Domain ----------
+    dom = _resolve_domain(model, x, y, nx, ny)
+    structured = dom["structured"]
+    Xg, Yg = dom["Xg"], dom["Yg"]
+    x_flat, y_flat = dom["x_flat"], dom["y_flat"]
+    NX, NY = dom["nx"], dom["ny"]
+    ix, iy = dom["ix"], dom["iy"]
+
+    def to_grid(a):
+        G = np.full((NY, NX), np.nan, dtype=np.float64)
+        G[iy, ix] = a
+        return G
+
+    # ---------- Compute residuals ----------
+    coords = torch.tensor(
+        np.column_stack(
+            [x_flat, y_flat, np.full(len(x_flat), t_val, dtype=np.float32)]
+        ),
+        dtype=torch.float32,
+        device=device,
+    )
+    model.eval()
+    res = model.compute_residuals(coords)
+    residual_dict = {
+        k: v.detach().cpu().numpy().ravel() for k, v in res.items()
+    }
+
+    # ---------- Optional VOF overlay ----------
+    vof_field = None
+    if overlay_vof:
+        v = _forward_vof(model, coords)
+        if v is not None:
+            vof_field = v.detach().cpu().numpy().ravel()
+
+    # ---------- Figure ----------
+    n_fields = len(fields)
+    if figsize is None:
+        figsize = (8, 4.5 * n_fields)
+    fig, axes = plt.subplots(n_fields, 1, figsize=figsize, squeeze=False)
+    axes = axes.ravel()
+
+    for idx, field in enumerate(fields):
+        ax = axes[idx]
+        Z = residual_dict[field].astype(np.float64)
+        if abs_value or log:
+            Z = np.abs(Z)
+
+        # ---- Robust colour scale ----
+        if log:
+            vmax = float(np.nanpercentile(Z, 99.5))
+            vmin = max(float(np.nanpercentile(Z, 1)), vmax * 1e-8, 1e-12)
+            if vmax <= 0:
+                vmax = 1.0
+            scale_kwargs = dict(norm=LogNorm(vmin=vmin, vmax=vmax))
+        else:
+            p = float(np.nanpercentile(np.abs(Z), 99))
+            if not np.isfinite(p) or p == 0.0:
+                p = 1.0
+            scale_kwargs = (
+                dict(vmin=0.0, vmax=p) if abs_value else dict(vmin=-p, vmax=p)
+            )
+
+        # ---- Draw: always a contour ----
+        if structured:
+            Zg = to_grid(Z)
+            im = ax.contourf(
+                Xg, Yg, Zg, levels=40, cmap=cmap,
+                extend="both", **scale_kwargs,
+            )
+            if vof_field is not None:
+                Ag = to_grid(vof_field)
+                ax.contour(
+                    Xg, Yg, Ag, levels=[0.5],
+                    colors="k", linewidths=1.2, linestyles="--",
+                )
+        else:
+            im = ax.tricontourf(
+                x_flat, y_flat, Z, levels=40, cmap=cmap,
+                extend="both", **scale_kwargs,
+            )
+            if vof_field is not None:
+                ax.tricontour(
+                    x_flat, y_flat, vof_field, levels=[0.5],
+                    colors="k", linewidths=1.2, linestyles="--",
+                )
+
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_xlabel("x [m]")
+        ax.set_ylabel("y [m]")
+        ax.set_title(f"{field} residual at t = {t_val:.4f} s")
+        ax.grid(alpha=0.15)
+        fig.colorbar(
+            im, ax=ax,
+            label=f"|{field}|" if (abs_value or log) else f"{field}",
+        )
+
+    fig.suptitle(f"Physical Residuals at t = {t_val:.4f} s", y=1.01)
+    fig.tight_layout()
+    return fig
+
+
+# =====================================================================
+# Animation
+# =====================================================================
+@torch.no_grad()
+def animate_residuals(
+    model,
+    times,
+    x=None,
+    y=None,
+    fields=("continuity", "vof", "momentum_x", "momentum_y"),
+    nx=None,
+    ny=None,
+    cmap="viridis",
+    abs_value=True,
+    log=False,
+    overlay_vof=True,
+    fps=10.0,
+    interval=None,
+    save_path=None,
+    dpi=120,
+    figsize=None,
+    repeat=True,
+    display_animation=True,
+):
+    """Animate PINN residual maps over a sequence of times.
+
+    Same domain logic and same colour defaults as :func:`plot_residuals`.
+    Residuals at all time steps are pre-computed once and the colour scale
+    is fixed across frames (``p99`` or ``LogNorm`` over all frames), so
+    that spatial structure can be compared frame-to-frame.
+
+    Parameters
+    ----------
+    model : SloshingPINN
+    times : array-like of float
+        Sequence of time values (seconds).
+    x, y : np.ndarray, optional
+        Domain points. If both ``None``, built from cfg bounds.
+    fields, nx, ny, cmap, abs_value, log, overlay_vof
+        See :func:`plot_residuals`.
+    fps : float
+        Frames per second.
+    interval : float, optional
+        Delay between frames (ms). Overrides ``fps`` if given.
+    save_path : str, optional
+        ``.gif`` → PillowWriter, otherwise FFMpegWriter.
+    dpi : int
+        DPI used when saving.
+    figsize : tuple, optional
+        Default ``(8, 4.5 * n_fields)``.
+    repeat : bool
+        Loop the animation in interactive display.
+    display_animation : bool
+        Whether to display the animation in the notebook.
+
+    Returns
+    -------
+    anim : matplotlib.animation.FuncAnimation
+    fig : matplotlib.figure.Figure
+    """
+    cfg = model.cfg
+    if cfg is None:
+        raise ValueError("The model has no configuration (model.cfg is None).")
+
+    if isinstance(fields, str):
+        fields = (fields,)
+    valid = {"continuity", "vof", "momentum_x", "momentum_y"}
+    for f in fields:
+        if f not in valid:
+            raise ValueError(f"Invalid field '{f}'. Must be one of {valid}.")
+
+    times = np.asarray(times, dtype=np.float64).ravel()
+    if len(times) == 0:
+        raise ValueError("times must contain at least one value.")
+    n_t = len(times)
+
+    device = next(model.parameters()).device
+
+    # ---------- Domain ----------
+    dom = _resolve_domain(model, x, y, nx, ny)
+    structured = dom["structured"]
+    Xg, Yg = dom["Xg"], dom["Yg"]
+    x_flat, y_flat = dom["x_flat"], dom["y_flat"]
+    NX, NY = dom["nx"], dom["ny"]
+    ix, iy = dom["ix"], dom["iy"]
+    n_pts = len(x_flat)
+
+    def to_grid(a):
+        G = np.full((NY, NX), np.nan, dtype=np.float64)
+        G[iy, ix] = a
+        return G
+
+    # ---------- Precompute residuals + VOF overlay ----------
+    residuals_flat = {f: np.empty((n_t, n_pts), dtype=np.float32) for f in fields}
+    vofs = None
+    vof_ok = overlay_vof
+    if overlay_vof:
+        vofs_tmp = np.empty((n_t, n_pts), dtype=np.float32)
+
+    model.eval()
+    for k, tk in enumerate(times):
+        coords = torch.tensor(
+            np.column_stack(
+                [x_flat, y_flat, np.full(n_pts, float(tk), dtype=np.float32)]
+            ),
+            dtype=torch.float32,
+            device=device,
+        )
+        res = model.compute_residuals(coords)
+        for f in fields:
+            residuals_flat[f][k] = res[f].detach().cpu().numpy().ravel()
+
+        if overlay_vof and vof_ok:
+            v = _forward_vof(model, coords)
+            if v is None:
+                vof_ok = False
+            else:
+                vofs_tmp[k] = v.detach().cpu().numpy().ravel()
+    if overlay_vof and vof_ok:
+        vofs = vofs_tmp
+
+    # ---------- Global, fixed colour scales ----------
+    scale_kwargs = {}
+    for f in fields:
+        Z = residuals_flat[f].astype(np.float64)
+        if abs_value or log:
+            Z = np.abs(Z)
+        if log:
+            vmax = float(np.nanpercentile(Z, 99.5))
+            vmin = max(float(np.nanpercentile(Z, 1)), vmax * 1e-8, 1e-12)
+            if vmax <= 0:
+                vmax = 1.0
+            scale_kwargs[f] = dict(norm=LogNorm(vmin=vmin, vmax=vmax))
+        else:
+            p = float(np.nanpercentile(np.abs(Z), 99))
+            if not np.isfinite(p) or p == 0.0:
+                p = 1.0
+            scale_kwargs[f] = (
+                dict(vmin=0.0, vmax=p) if abs_value else dict(vmin=-p, vmax=p)
+            )
+
+    # ---------- Axis limits ----------
+    if structured:
+        xlim = (float(Xg.min()), float(Xg.max()))
+        ylim = (float(Yg.min()), float(Yg.max()))
+    else:
+        xlim = (float(x_flat.min()), float(x_flat.max()))
+        ylim = (float(y_flat.min()), float(y_flat.max()))
+
+    # ---------- Figure ----------
+    n_fields = len(fields)
+    if figsize is None:
+        figsize = (8, 4.5 * n_fields)
+    fig, axes = plt.subplots(n_fields, 1, figsize=figsize, squeeze=False)
+    axes = axes.ravel()
+
+    def render(k, create_cbar):
+        for idx, f in enumerate(fields):
+            ax = axes[idx]
+            ax.cla()
+            Z = residuals_flat[f][k].astype(np.float64)
+            if abs_value or log:
+                Z = np.abs(Z)
+
+            if structured:
+                Zg = to_grid(Z)
+                im = ax.contourf(
+                    Xg, Yg, Zg, levels=40, cmap=cmap,
+                    extend="both", **scale_kwargs[f],
+                )
+                if vofs is not None:
+                    Ag = to_grid(vofs[k])
+                    ax.contour(
+                        Xg, Yg, Ag, levels=[0.5],
+                        colors="k", linewidths=1.2, linestyles="--",
+                    )
+            else:
+                im = ax.tricontourf(
+                    x_flat, y_flat, Z, levels=40, cmap=cmap,
+                    extend="both", **scale_kwargs[f],
+                )
+                if vofs is not None:
+                    ax.tricontour(
+                        x_flat, y_flat, vofs[k], levels=[0.5],
+                        colors="k", linewidths=1.2, linestyles="--",
+                    )
+
+            ax.set_xlim(xlim)
+            ax.set_ylim(ylim)
+            ax.set_aspect("equal", adjustable="box")
+            ax.set_xlabel("x [m]")
+            ax.set_ylabel("y [m]")
+            ax.set_title(f"{f} residual at t = {float(times[k]):.4f} s")
+            ax.grid(alpha=0.15)
+
+            if create_cbar:
+                fig.colorbar(
+                    im, ax=ax,
+                    label=f"|{f}|" if (abs_value or log) else f"{f}",
+                )
+
+        fig.suptitle(
+            f"Physical Residuals  (t = {float(times[k]):.4f} s)", y=1.01
+        )
+        return []
+
+    # First frame + colorbars + frozen layout
+    render(0, create_cbar=True)
+    fig.tight_layout()
+    positions = [ax.get_position() for ax in axes]
+
+    def update(k):
+        render(k, create_cbar=False)
+        for i, p in enumerate(positions):
+            axes[i].set_position(p)
+        return []
+
+    if interval is None:
+        interval = 1000.0 / max(float(fps), 1e-6)
+
+    anim = FuncAnimation(
+        fig, update, frames=n_t, interval=interval, blit=False, repeat=repeat
+    )
+
+    if save_path is not None:
+        sp = str(save_path)
+        if sp.endswith(".gif"):
+            from matplotlib.animation import PillowWriter
+            anim.save(sp, writer=PillowWriter(fps=fps), dpi=dpi)
+        else:
+            anim.save(sp, fps=fps, dpi=dpi)
+        print(f"Saved animation to {sp}")
+
+    if display_animation:
+        plt.close(fig)
+        display(HTML(anim.to_jshtml()))
+
+    return anim, fig
