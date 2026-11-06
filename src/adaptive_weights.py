@@ -87,6 +87,10 @@ class GradNormWeights:
         self._resolved_params = params
         return params
 
+    def reset_baselines(self):
+        """Reset reference losses for a new temporal window."""
+        self.initial_losses = None
+
     def update(self, losses, model):
         """Perform one GradNorm update and return the new weights.
 
