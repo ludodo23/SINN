@@ -120,6 +120,7 @@ class Config:
     print_every: int = 50
     seed: int = 1234
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
+    checkpoint_interval = 100
 
     # Poids des pertes
     w_continuity: float = 1.0
