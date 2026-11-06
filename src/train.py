@@ -455,11 +455,14 @@ def train(
             global_epoch += 1
             model.train()
 
-            # Collocation adaptative : mise à jour périodique du pool.
+            sampling_refreshed = False
+
             if cfg.use_adaptive_sampling and (
                 cached_interior_si is None
                 or local_epoch % cfg.sampling_update_interval == 0
             ):
+                sampling_refreshed = True
+
                 model.eval()
                 with torch.enable_grad():
                     # Interior candidates
@@ -656,8 +659,15 @@ def train(
             # Option adaptative : remplacer les poids périodiquement.
             if cfg.use_adaptive_loss_weights and (
                 local_epoch % cfg.weight_update_interval == 0
+                and not sampling_refreshed
+                and local_epoch > 0
             ):
-                weights.update(weight_balancer.update(loss_terms, model))
+                adaptive_weights = weight_balancer.update(
+                    loss_terms, model
+                )
+
+                weights.update(adaptive_weights)
+
 
             total = sum(weights[k] * loss_terms[k] for k in loss_terms)
 
