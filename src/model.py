@@ -148,12 +148,12 @@ class SloshingPINN(nn.Module):
         if state_path is not None:
             state_path = Path(state_path)
             state = torch.load(state_path, map_location="cpu", weights_only=False)
-            if isinstance(state, dict) and "model_state_dict" in state:
-                self.load_state_dict(state["model_state_dict"])
-            elif isinstance(state, nn.Module):
-                self.load_state_dict(state.state_dict())
-            else:
-                self.load_state_dict(state)
+            # if isinstance(state, dict) and "model_state_dict" in state:
+            #     self.load_state_dict(state["model_state_dict"])
+            # elif isinstance(state, nn.Module):
+            #     self.load_state_dict(state.state_dict())
+            # else:
+            self.load_state_dict(state["model"])
 
     def forward(self, coords_star: torch.Tensor) -> dict[str, torch.Tensor]:
         """Forward pass.
@@ -341,6 +341,56 @@ class SloshingPINN(nn.Module):
             "momentum_x":  rx.squeeze(-1),      # (N,)
             "momentum_y":  ry.squeeze(-1),      # (N,)
         }
+
+    def compute_residuals_star(self, coords_star: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Compute physical residuals at given non-dimensional collocation points.
+
+        Parameters
+        ----------
+        coords_star : torch.Tensor
+            Non-dimensional coordinates, shape ``(N, 3)`` with columns
+            ``(x*, y*, t*)``.
+
+        Returns
+        -------
+        dict of str to torch.Tensor
+            Dictionary with keys :
+            - ``"continuity"`` : continuity residual per point, shape ``(N,)``.
+            - ``"vof"`` : volume-fraction residual per point, shape ``(N,)``.
+            - ``"momentum_x"`` : x-momentum residual per point, shape ``(N,)``.
+            - ``"momentum_y"`` : y-momentum residual per point, shape ``(N,)``.
+
+        Notes
+        -----
+        The model's configuration (``self.cfg``) is used to compute the
+        non-dimensional residuals.  All residuals are **signed** (not squared),
+        so they can be inspected for positive/negative bias.
+        The call internally enables gradients (``torch.enable_grad``) so that
+        it works whether the model is in ``eval()`` or ``train()`` mode,
+        and regardless of the surrounding ``torch.no_grad()`` context.
+        """
+        if self.cfg is None:
+            raise ValueError(
+                "compute_residuals_star requires the Config used to build the model. "
+                "Provide it during model construction (state_path/config)."
+            )
+
+        # Ensure coordinates have the expected shape (N, 3).
+        if coords_star.ndim != 2 or coords_star.shape[1] != 3:
+            raise ValueError(
+                f"coords_star must have shape (N, 3) with columns (x*, y*, t*), "
+                f"got {coords_star.shape}."
+            )
+
+        c = coords_star.detach().clone().requires_grad_(True)
+
+        # Force gradient computation even if outside a no_grad context.
+        with torch.enable_grad():
+            # --- continuity residual ---
+            r_cont = continuity_loss(self, c, self.cfg, return_raw=True)  # (N, 1)
+
+            # --- volume-fraction residual ---
+            r_vof = volume_fraction_loss(self, c, self.cfg, return_raw=True)  # (N, 1)
 
 
 # ============================================================

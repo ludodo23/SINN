@@ -826,6 +826,7 @@ def plot_residuals(
     log=False,
     overlay_vof=True,
     figsize=None,
+    model_name=None
 ):
     """Plot physical residuals of a PINN as 2D contour maps in (x, y).
 
@@ -859,6 +860,8 @@ def plot_residuals(
         Overlay the ``α = 0.5`` iso-contour of the predicted VOF field.
     figsize : tuple, optional
         Default ``(8, 4.5 * n_fields)``.
+    model_name : str, optional
+        Name of the model for labeling purposes.
 
     Returns
     -------
@@ -915,8 +918,14 @@ def plot_residuals(
     # ---------- Figure ----------
     n_fields = len(fields)
     if figsize is None:
-        figsize = (8, 4.5 * n_fields)
-    fig, axes = plt.subplots(n_fields, 1, figsize=figsize, squeeze=False)
+        if n_fields == 4:
+            figsize = (8, 9)
+        else:
+            figsize = (8, 4.5 * n_fields)
+    if n_fields == 4:
+        fig, axes = plt.subplots(2, 2, figsize=figsize, squeeze=False)
+    else:
+        fig, axes = plt.subplots(n_fields, 1, figsize=figsize, squeeze=False)
     axes = axes.ravel()
 
     for idx, field in enumerate(fields):
@@ -974,7 +983,9 @@ def plot_residuals(
             label=f"|{field}|" if (abs_value or log) else f"{field}",
         )
 
-    fig.suptitle(f"Physical Residuals at t = {t_val:.4f} s", y=1.01)
+    model_name = model_name or "PINN"
+
+    fig.suptitle(f"Physical Residuals of {model_name} at t = {t_val:.4f} s", y=1.01)
     fig.tight_layout()
     return fig
 
