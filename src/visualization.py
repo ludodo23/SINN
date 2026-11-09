@@ -3,8 +3,11 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, PillowWriter, FFMpegWriter
+from matplotlib.colors import LogNorm
+
 import numpy as np
 import torch
+
 
 from IPython.display import HTML, display
 
@@ -165,11 +168,12 @@ def load_model(
 @torch.no_grad()
 def plot_fields(
     model: SloshingPINN,
-    t=0.0,
+    t=(0.0,),
     nx=180,
     ny=80,
     fields=("u", "v", "p", "alpha"),
     openfoam_data=None,
+    residuals=True,
 ):
     """Plot fields predicted by the PINN model at time t.
 
@@ -179,8 +183,8 @@ def plot_fields(
         Loaded model (required). The configuration is retrieved from
         ``model.cfg`` and predictions go through ``predict_physical``
         (SI coordinates).
-    t : float, optional
-        Time in seconds for display. Default is 0.0.
+    t : float or tuple of floats, optional
+        Time(s) in seconds for display. Default is 0.0.
     nx, ny : int, optional
         Grid resolution for display. Defaults are 180 and 80.
     fields : tuple of str, optional
@@ -189,6 +193,10 @@ def plot_fields(
     openfoam_data : str or dict or None, optional
         If provided, for each field displays three panels side by side:
         OpenFOAM, PINN model, and relative error (scale 0 to 1).
+    residuals : bool, optional
+        If True, also display residuals returned by
+        ``model.compute_residuals``. Default is True.
+        Ignored if ``openfoam_data`` is provided.
     """
     cfg = model.cfg
     if cfg is None:
@@ -209,6 +217,10 @@ def plot_fields(
 
     device = next(model.parameters()).device
 
+    if isinstance(t, (float, int)):
+        t = (float(t),)
+    t = np.asanyarray(t, dtype=np.float32).reshape(-1)
+
     # Load OpenFOAM data for comparison if provided, so that the
     # display grid (nx, ny) can be calibrated on the OpenFOAM "X".
     of = None
@@ -224,7 +236,13 @@ def plot_fields(
         X_of = np.asarray(of["X"])
         t_of = np.asarray(of["time"]).reshape(-1)
         # Find the OpenFOAM time closest to t.
-        i_t = int(np.argmin(np.abs(t_of - t)))
+        i_t = np.argmin(np.abs(t_of[None, :] - t[:, None]), axis=1)  # shape (K,)
+        t = t_of[i_t]  # Use the exact OpenFOAM time for display.
+        print("Using OpenFOAM times for display:", t, "instead of provided.")
+
+    # group t by three
+    t_groups = [tuple(t[i:i+3]) for i in range(0, len(t), 3)]
+
 
     if of is not None:
         # Calibrate nx, ny on the OpenFOAM X (unique sorted coordinates).
@@ -234,74 +252,103 @@ def plot_fields(
         y = ys
         nx = int(len(x))
         ny = int(len(y))
+        residuals = False  # No residuals when comparing with OpenFOAM
+        print("residuals display disabled when comparing with OpenFOAM data.")
     else:
         x = np.linspace(x_min, x_max, nx)
         y = np.linspace(y_min, y_max, ny)
 
     X, Y = np.meshgrid(x, y)
-    T = np.full_like(X, t)
-
-    coords_np = np.stack(
-        [X.ravel(), Y.ravel(), T.ravel()],
-        axis=1,
-    )
-
-    coords = torch.tensor(
-        coords_np,
-        dtype=torch.float32,
-        device=device,
-    )
-
-    prediction = model.predict_physical(coords)
 
     if isinstance(fields, str):
         fields = (fields,)
 
-    for field in fields:
-        Z = prediction[field].cpu().numpy().reshape(ny, nx)
+    figs = []
+    axes = []
 
-        if of is None:
-            fig, ax = plt.subplots(figsize=(8, 5))
-            im = ax.contourf(X, Y, Z, levels=40)
-            cbar = fig.colorbar(im, ax=ax, label=field)
-            ax.set_xlabel("x [m]")
-            ax.set_ylabel("y [m]")
-            ax.set_title(f"{field} at t = {t:.4f} s")
-            ax.set_aspect("equal", adjustable="box")
-            return fig
-        else:
-            # Three panels: OpenFOAM, model, relative error.
-            Z_of = np.asarray(of[field])[i_t].reshape(ny, nx, order="F")
-            with np.errstate(divide="ignore", invalid="ignore"):
-                denom = np.maximum(np.abs(Z_of), 1e-12)
-                err = np.abs(Z - Z_of) / denom
-                err = np.clip(err, 0.0, 1.0)
+    for j, t_group in enumerate(t_groups):
+        n = len(t_group)
 
-            fig, axes = plt.subplots(
-                1, 3, figsize=(15, 4), sharex=True, sharey=True
-            )
+        # print(t_group)
 
-            im0 = axes[0].contourf(X, Y, Z_of, levels=40)
-            axes[0].set_title("OpenFOAM")
-            fig.colorbar(im0, ax=axes[0], label=field, fraction=0.046)
+        for field in fields:
+            if of is None and residuals:
+                fig, ax = plt.subplots(n, 2, figsize=(12, 5*n))
+                fig.suptitle(f"{field} and residuals from PINN at t = {np.asarray(t_group, dtype=np.float32).tolist()}")
+            elif of is None:
+                fig, ax = plt.subplots(n, 1, figsize=(8, 5*n))
+                fig.suptitle(f"{field} at from PINN t = {np.asarray(t_group, dtype=np.float32).tolist()}")
+            else:
+                fig, ax = plt.subplots(n, 3, figsize=(15, 5*n))
+                fig.suptitle(f"Comparison of {field} at t = {np.asarray(t_group, dtype=np.float32).tolist()} with OpenFOAM")
+            ax = np.atleast_2d(ax)
+            figs.append(fig)
+            axes.extend(ax.flatten() if isinstance(ax, list) else [ax])
 
-            im1 = axes[1].contourf(X, Y, Z, levels=40)
-            axes[1].set_title("SINN (model)")
-            fig.colorbar(im1, ax=axes[1], label=field, fraction=0.046)
+            for i, ti in enumerate(t_group):
+                T = np.full_like(X, ti)
+                coords_np = np.stack(
+                    [X.ravel(), Y.ravel(), T.ravel()],
+                    axis=1,
+                )
+            
+                coords = torch.tensor(
+                    coords_np,
+                    dtype=torch.float32,
+                    device=device,
+                )
 
-            im2 = axes[2].contourf(X, Y, err, levels=40, vmin=0, vmax=1)
-            axes[2].set_title("Relative error")
-            fig.colorbar(im2, ax=axes[2], label="|m−o|/max(|o|,eps)", fraction=0.046)
+                prediction = model.predict_physical(coords)
+                Z = prediction[field].cpu().numpy().reshape(ny, nx)
+                Z_res = None
+                if residuals:
+                    prediction_residuals = model.compute_residuals(coords)
+                    if field in prediction_residuals:
+                        Z_res = prediction_residuals[field].cpu().numpy().reshape(ny, nx)
+                    else:
+                        print(f"{field} not found in residuals, skipping residuals display.")
 
-            for ax in axes:
-                ax.set_xlabel("x [m]")
-                ax.set_ylabel("y [m]")
-                ax.set_aspect("equal", adjustable="box")
-                ax.grid(alpha=0.15)
+                if of is None:
+                    im = ax[i, 0].contourf(X, Y, Z, levels=40)
+                    cbar = fig.colorbar(im, ax=ax[i, 0], label=field)
+                    ax[i, 0].set_title("Model")
+                    ax[i, 0].set_xlabel("x [m]")
+                    ax[i, 0].set_ylabel("y [m]")
+                    if Z_res is not None:
+                        im_res = ax[i, 1].contourf(X, Y, Z_res, levels=40)
+                        cbar_res = fig.colorbar(im_res, ax=ax[i, 1], label=field)
+                        ax[i, 1].set_title("Residuals")
+                        ax[i, 1].set_xlabel("x [m]")
+                        ax[i, 1].set_ylabel("y [m]")
 
-            fig.suptitle(f"{field} at t = {t:g} s")
+                else:
+                    # Three panels: OpenFOAM, model, relative error.
+                    Z_of = np.asarray(of[field])[i_t[i*3+j]].reshape(ny, nx, order="F")
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        denom = np.maximum(np.abs(Z_of), 1e-12)
+                        err = np.abs(Z - Z_of) / denom
+                        err = np.clip(err, 0.0, 1.0)
+
+                    im0 = ax[i, 0].contourf(X, Y, Z_of, levels=40)
+                    ax[i, 0].set_title("OpenFOAM")
+                    fig.colorbar(im0, ax=ax[i, 0], label=field, fraction=0.046)
+
+                    im1 = ax[i, 1].contourf(X, Y, Z, levels=40)
+                    ax[i, 1].set_title("Model")
+                    fig.colorbar(im1, ax=ax[i, 1], label=field, fraction=0.046)
+
+                    im2 = ax[i, 2].contourf(X, Y, err, levels=40, vmin=0, vmax=1)
+                    ax[i, 2].set_title("Relative error")
+                    fig.colorbar(im2, ax=ax[i, 2], label="|m−o|/max(|o|,eps)", fraction=0.046)
+
+                    for a in ax[i, :]:
+                        a.set_xlabel("x [m]")
+                        a.set_ylabel("y [m]")
+                        a.set_aspect("equal", adjustable="box")
+                        a.grid(alpha=0.15)
+
             fig.tight_layout()
-            return fig
+    return figs, axes
 
 
 def _load_animation_data(data):
@@ -696,13 +743,6 @@ def animate_comparison(
         display(HTML(animation.to_jshtml()))
 
     return animation, fig
-
-
-import numpy as np
-import torch
-import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
-from matplotlib.colors import LogNorm
 
 
 # =====================================================================
