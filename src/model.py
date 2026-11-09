@@ -337,9 +337,9 @@ class SloshingPINN(nn.Module):
         # Squeeze the last dimension for a clean (N,) return.
         return {
             "continuity":  r_cont.squeeze(-1),  # (N,)
-            "vof":         r_vof.squeeze(-1),   # (N,)
-            "momentum_x":  rx.squeeze(-1),      # (N,)
-            "momentum_y":  ry.squeeze(-1),      # (N,)
+            "alpha":         r_vof.squeeze(-1),   # (N,)
+            "u":  rx.squeeze(-1),      # (N,)
+            "v":  ry.squeeze(-1),      # (N,)
         }
 
     def compute_residuals_star(self, coords_star: torch.Tensor) -> dict[str, torch.Tensor]:
@@ -356,9 +356,9 @@ class SloshingPINN(nn.Module):
         dict of str to torch.Tensor
             Dictionary with keys :
             - ``"continuity"`` : continuity residual per point, shape ``(N,)``.
-            - ``"vof"`` : volume-fraction residual per point, shape ``(N,)``.
-            - ``"momentum_x"`` : x-momentum residual per point, shape ``(N,)``.
-            - ``"momentum_y"`` : y-momentum residual per point, shape ``(N,)``.
+            - ``"alpha"`` : volume-fraction residual per point, shape ``(N,)``.
+            - ``"u"`` : x-momentum residual per point, shape ``(N,)``.
+            - ``"v"`` : y-momentum residual per point, shape ``(N,)``.
 
         Notes
         -----
