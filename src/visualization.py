@@ -174,6 +174,8 @@ def plot_fields(
     fields=("u", "v", "p", "alpha"),
     openfoam_data=None,
     residuals=True,
+    save_path=None,
+    dpi=150,
 ):
     """Plot fields predicted by the PINN model at time t.
 
@@ -197,6 +199,14 @@ def plot_fields(
         If True, also display residuals returned by
         ``model.compute_residuals``. Default is True.
         Ignored if ``openfoam_data`` is provided.
+    save_path : str or None, optional
+        Path where figures should be saved. If a single path ending in
+        ``.png`` or ``.pdf`` is given, that figure is saved. If a
+        directory path (or a path without suffix) is given, each figure
+        is saved as ``figure_0.png``, ``figure_1.png``, etc., inside
+        that directory. If ``None`` (default), no saving is performed.
+    dpi : int, optional
+        Dots-per-inch for saved figures. Default is 150.
     """
     cfg = model.cfg
     if cfg is None:
@@ -269,8 +279,6 @@ def plot_fields(
     for j, t_group in enumerate(t_groups):
         n = len(t_group)
 
-        # print(t_group)
-
         for field in fields:
             if of is None and residuals:
                 fig, ax = plt.subplots(n, 2, figsize=(12, 5*n))
@@ -323,7 +331,7 @@ def plot_fields(
 
                 else:
                     # Three panels: OpenFOAM, model, relative error.
-                    Z_of = np.asarray(of[field])[i_t[i*3+j]].reshape(ny, nx, order="F")
+                    Z_of = np.asarray(of[field])[i_t[3*j + i]].reshape(ny, nx, order="F")
                     with np.errstate(divide="ignore", invalid="ignore"):
                         denom = np.maximum(np.abs(Z_of), 1e-12)
                         err = np.abs(Z - Z_of) / denom
@@ -348,6 +356,29 @@ def plot_fields(
                         a.grid(alpha=0.15)
 
             fig.tight_layout()
+
+    # --- save figures if requested ---
+    from pathlib import Path
+    if save_path is not None:
+        sp = Path(save_path)
+        # ensure parent dirs exist
+        sp.parent.mkdir(parents=True, exist_ok=True)
+        if sp.suffix.lower() in {".png", ".pdf", ".svg"}:
+            # single figure path
+            if len(figs) == 1:
+                figs[0].savefig(sp, dpi=dpi, bbox_inches="tight")
+            elif len(figs) > 1:
+                # multi-figure: insert index before extension
+                base = sp.with_suffix("")
+                for i, fig in enumerate(figs):
+                    fig.savefig(f"{base}_{i}{sp.suffix}", dpi=dpi, bbox_inches="tight")
+        else:
+            # directory or no suffix: save each as figure_N.png inside
+            d = sp if sp.is_dir() or sp.suffix == "" else sp.parent / sp.name
+            d.mkdir(parents=True, exist_ok=True)
+            for i, fig in enumerate(figs):
+                fig.savefig(d / f"figure_{i}.png", dpi=dpi, bbox_inches="tight")
+
     return figs, axes
 
 
