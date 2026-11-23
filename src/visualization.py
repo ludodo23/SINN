@@ -1299,3 +1299,34 @@ def animate_residuals(
         display(HTML(anim.to_jshtml()))
 
     return anim, fig
+
+
+def compute_error_metrics(reference, prediction, eps=1e-12):
+    """MAE, RMSE, Relative L2 et percentile 95 de l'erreur absolue."""
+    ref, pred = np.asarray(reference).astype(float).reshape(-1), np.asarray(prediction).astype(float).reshape(-1)
+    if ref.shape != pred.shape: raise ValueError(f"Tailles différentes: {ref.shape} vs {pred.shape}.")
+    e = pred-ref
+    return {"MAE": float(np.mean(np.abs(e))),
+            "RMSE": float(np.sqrt(np.mean(e**2))),
+            "Relative_L2": float(np.linalg.norm(e)/(np.linalg.norm(ref)+eps)),
+            "P95_abs_error": float(np.percentile(np.abs(e), 95))}
+
+
+def plot_metric_comparison(metrics, metric="RMSE", *, config_col="configuration", save_path=None, dpi=150):
+    """Barplot de comparaison depuis un DataFrame pandas."""
+    if metric not in metrics or config_col not in metrics:
+        raise KeyError(f"Colonnes {config_col}, {metric} requises.")
+    ordered = metrics.sort_values(metric)
+    fig, ax = plt.subplots(figsize=(max(8, .55*len(ordered)), 4.5), constrained_layout=True)
+    ax.bar(ordered[config_col].astype(str), ordered[metric])
+    ax.set_ylabel(metric); ax.set_xlabel("Configuration")
+    ax.tick_params(axis="x", rotation=70); ax.grid(axis="y", alpha=.25)
+    if save_path is not None:
+        sp = Path(save_path)
+        # ensure parent dirs exist
+        sp.parent.mkdir(parents=True, exist_ok=True)
+        if sp.suffix.lower() in {".png", ".pdf", ".svg"}:
+            fig.savefig(sp, dpi=dpi)
+        else:
+            fig.savefig(sp + ".png", dpi=dpi)
+    return fig, ax

@@ -239,30 +239,10 @@ class SloshingPINN(nn.Module):
         scales = coords_si.new_tensor([L, L, T])
         return coords_si / scales
 
-    def predict_physical(self, coords_si: torch.Tensor) -> dict[str, torch.Tensor]:
-        """Predict physical quantities from SI coordinates.
+    def _predict_physical_coords(self, coords_si: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Predict physical quantities from SI coordinates (N, 3).
 
-        Parameters
-        ----------
-        coords_si : torch.Tensor
-            SI coordinates, shape ``(N, 3)`` with columns ``(x, y, t)``.
-
-        Returns
-        -------
-        dict of str to torch.Tensor
-            Dictionary with keys ``"u"``, ``"v"``, ``"p"``, ``"alpha"``.
-            ``u`` and ``v`` are in [m/s], ``p`` is in [Pa], and
-            ``alpha`` is dimensionless in ``[0, 1]``.
-
-        Raises
-        ------
-        ValueError
-            If the model was built without a configuration.
-
-        Notes
-        -----
-        The coordinates are first non-dimensionalised using the configuration
-        reference scales before being passed to the network.
+        Called internally when the model already has properly-shaped (N,3) input.
         """
         if self.cfg is None:
             raise ValueError("predict_physical requires the Config used to build the model.")
@@ -279,6 +259,167 @@ class SloshingPINN(nn.Module):
         f = self.forward(coords_si / scales)
         return {"u": U*f["u"], "v": U*f["v"], "p": rho*U**2*f["p"],
                 "alpha": f["alpha"]}
+
+    def _predict_physical_regular_grid(
+        self,
+        x_1d, y_1d, t_1d,
+        *,
+        fields=("u", "v", "p", "alpha"),
+        batch_points: int = 2**16,   # ~65k points GPU par forward
+        dtype=np.float32,
+        verbose: bool = False,
+    ):
+        """Prédit sur une grille cartésienne régulière (nt, ny, nx).
+
+        Mémoire bornée :
+        - coords GPU : batch_points × 3 floats
+        - sortie CPU : 4 × nt × ny × nx × 4 octets (pré-allouée)
+        La boucle sur t n'alloue jamais plus que `batch_points` points GPU.
+        """
+        x_1d = np.asarray(x_1d, dtype=dtype).ravel()
+        y_1d = np.asarray(y_1d, dtype=dtype).ravel()
+        t_1d = np.asarray(t_1d, dtype=dtype).ravel()
+        nx, ny, nt = x_1d.size, y_1d.size, t_1d.size
+
+        device = next(self.parameters()).device
+
+        # Sortie CPU pré-allouée une fois (contiguë par tranche → reshape(-1) = vue).
+        result = {f: np.empty((nt, ny, nx), dtype=dtype) for f in fields}
+
+        # (y, x) aplati, calculé UNE seule fois et partagé entre tous les t.
+        Xg, Yg = np.meshgrid(x_1d, y_1d, indexing="xy")   # (ny, nx)
+        x_flat = np.ascontiguousarray(Xg.ravel(), dtype=dtype)
+        y_flat = np.ascontiguousarray(Yg.ravel(), dtype=dtype)
+        n_xy = x_flat.size
+
+        # Buffer GPU réutilisé à chaque chunk (évite les allocs répétées).
+        coords = torch.empty(
+            (min(batch_points, n_xy), 3), dtype=torch.float32, device=device
+        )
+
+        for l in range(nt):
+            t_val = float(t_1d[l])
+            # Vues aplaties sur la tranche (nt[l, :, :]) — écriture in-place.
+            slab = {f: result[f][l].reshape(-1) for f in fields}
+
+            for s in range(0, n_xy, batch_points):
+                e = min(s + batch_points, n_xy)
+                n = e - s
+                cb = coords[:n]
+                cb[:, 0] = torch.from_numpy(x_flat[s:e]).to(device, non_blocking=True)
+                cb[:, 1] = torch.from_numpy(y_flat[s:e]).to(device, non_blocking=True)
+                cb[:, 2] = t_val
+
+                with torch.inference_mode():
+                    pred = self._predict_physical_coords(cb)
+
+                for f in fields:
+                    slab[f][s:e] = pred[f].squeeze(-1).detach().cpu().numpy()
+
+            if verbose:
+                print(f"  t-step {l + 1}/{nt} terminé")
+
+        return result
+
+    def _predict_physical_coords_chunked(self, coords: torch.Tensor,
+                                     batch_size: int = 65536):
+        device = next(self.parameters()).device
+        coords = coords.to(device=device, dtype=torch.float32)
+        outs = None
+        parts = []
+        with torch.inference_mode():
+            for s in range(0, coords.shape[0], batch_size):
+                p = self._predict_physical_coords(coords[s:s + batch_size])
+                parts.append(p)
+        keys = parts[0].keys()
+        return {k: torch.cat([p[k] for p in parts], dim=0) for k in keys}
+
+    def predict_physical(self, *args, **kwargs) -> dict[str, np.ndarray]:
+        """Predict physical quantities from SI or non-dimensional coordinates.
+
+        Two call patterns are supported :
+
+        1. **Single tensor** ``predict_physical(coords_si)``  where
+           ``coords_si`` has shape ``(N, 3)`` with columns ``(x, y, t)``.
+        2. **Three 1‑D sequences** ``predict_physical(x, y, t)`` where each
+           argument is a 1‑D array/sequence of possibly different lengths.
+           The method builds a broadcasted grid ``(nt, ny, nx)`` and returns
+           fields in that shape.
+
+        Parameters
+        ----------
+        *args : positional
+            - One tensor/array of shape ``(N, 3)``, or
+            - Three 1‑D sequences ``x, y, t``.
+        **kwargs : optional
+            - ``coords_si`` : tensor of shape ``(N, 3)`` (alias for positional).
+
+        Returns
+        -------
+        dict of str to torch.Tensor
+            Keys ``"u"``, ``"v"``, ``"p"``, ``"alpha"``.
+            - If called with a single (N,3) tensor, each value has shape ``(N, 1)``.
+            - If called with three 1‑D sequences, each value has shape ``(nt, ny, nx)``.
+
+        Raises
+        ------
+        ValueError
+            If the arguments do not match either supported pattern, or the model
+            has no configuration.
+        """
+        # --- resolve arguments -------------------------------------------------
+        # allow passing coords_si as keyword
+        if "coords_si" in kwargs:
+            args = (kwargs["coords_si"],) + args
+        elif "x" in kwargs and "y" in kwargs and "t" in kwargs:
+            args = (kwargs["x"], kwargs["y"], kwargs["t"]) + args
+
+        # decide which pattern
+        if len(args) == 1 and args[0] is not None:
+            # pattern A : single (N,3) tensor
+            inp = args[0]
+            if isinstance(inp, torch.Tensor):
+                if inp.ndim == 2 and inp.shape[1] == 3:
+                    return self._predict_physical_coords(inp)
+                # otherwise fall through to error
+            elif isinstance(inp, (np.ndarray, list)):
+                arr = np.asarray(inp)
+                if arr.ndim == 2 and arr.shape[1] == 3:
+                    # convert to tensor and dispatch
+                    st = torch.as_tensor(arr, dtype=torch.float32,
+                                         device=next(self.parameters()).device)
+                    return self._predict_physical_coords(st)
+            raise ValueError(
+                "predict_physical received a single argument that is not "
+                "(N, 3). Expected shape (N, 3) with columns (x, y, t)."
+            )
+
+        elif len(args) >= 3:
+            grid_kwargs = {
+                k: kwargs[k] for k in ("fields", "batch_points", "dtype", "verbose")
+                if k in kwargs
+            }
+            return self._predict_physical_regular_grid(
+                args[0], args[1], args[2], **grid_kwargs
+            )
+
+        else:
+            raise ValueError(
+                "predict_physical expects either one (N, 3) tensor or three "
+                "1-D sequences x, y, t."
+            )
+
+    def predict_physical_grid(
+        self, *, nx, ny, nt,
+        x_range, y_range, t_range,
+        **kwargs,
+    ):
+        """Construit nx, ny, nt points uniformes sur [min, max] et prédit."""
+        def lin(n, r):
+            return np.linspace(float(r[0]), float(r[1]), int(n), dtype=np.float32)
+        return self.predict_physical(
+            lin(nx, x_range), lin(ny, y_range), lin(nt, t_range), **kwargs
+        )
 
     def compute_residuals(self, coords_si: torch.Tensor) -> dict[str, torch.Tensor]:
         """Compute physical residuals at given collocation points.

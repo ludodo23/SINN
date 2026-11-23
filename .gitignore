@@ -72,6 +72,7 @@ htmlcov/
 # Checkpoints
 checkpoints/
 models/
+models_save/
 weights/
 
 # Logs / TensorBoard
@@ -124,3 +125,5 @@ Desktop.ini
 reports/*.npz
 reports/*.json
 reports/*.csv
+reports/figures/*
+reports/tables/*
